@@ -39,7 +39,7 @@ DEFAULT_BUDGET=100
 COMMAND=""
 USERNAME=""
 USER_EMAIL=""
-PERMISSION_SET_CONFIG=""
+PERMISSION_SET_CONFIGS=()  # Array to support multiple permission sets
 BUDGET_AMOUNT="${DEFAULT_BUDGET}"
 NOTIFICATION_EMAILS=""  # Extra notification emails (comma-separated, optional)
 ADMIN_EMAIL=""  # Will be auto-detected from management account
@@ -86,7 +86,8 @@ Commands:
 Options for 'create':
   --username NAME              Username for Identity Center user (e.g., alice)
   --email EMAIL                User's email (also used to auto-generate account email)
-  --permission-set-config FILE Permission Set config (default: ${DEFAULT_PERMISSION_SET_CONFIG})
+  --permission-set-config FILE Permission Set config (can be specified multiple times)
+                               (default: ${DEFAULT_PERMISSION_SET_CONFIG})
   --budget AMOUNT              Monthly budget in USD (default: ${DEFAULT_BUDGET})
   --notification-emails EMAILS Additional emails for budget alerts (comma-separated, optional)
                                Note: User and admin emails are always included
@@ -114,6 +115,15 @@ Examples:
     --notification-emails "finance@company.com,cto@company.com"
 
   # Notifications will be sent to: bob@company.com, admin@org.com, finance@company.com, cto@company.com
+
+  # Create with multiple permission sets
+  $(basename "$0") create \\
+    --username charlie \\
+    --email charlie@company.com \\
+    --permission-set-config permission-sets/terraform-deployer.json \\
+    --permission-set-config permission-sets/administrator.json
+
+  # User will have both TerraformDeployer and AdministratorAccess permissions
 
   # List all user environments
   $(basename "$0") list
@@ -211,7 +221,7 @@ create_user_environment() {
     local username="$1"
     local user_email="$2"
     local budget="$3"
-    local ps_config="$4"
+    # Use global PERMISSION_SET_CONFIGS array directly (bash 3.2 compatible)
     
     # Auto-generate account email from user email using + notation
     local account_email
@@ -238,26 +248,31 @@ create_user_environment() {
     log_info "  User Email:       ${user_email}"
     log_info "  Account Name:     ${account_name}"
     log_info "  Account Email:    ${account_email} (auto-generated)"
-    log_info "  Permission Set:   ${ps_config}"
+    log_info "  Permission Sets:  ${#PERMISSION_SET_CONFIGS[@]} config(s)"
+    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+        log_info "    - ${ps_config}"
+    done
     log_info "  Budget:           \$${budget}/month"
     echo ""
     
-    # Step 0: Ensure Permission Set exists
-    log_info "STEP 0/5: Checking Permission Set..."
+    # Step 0: Ensure Permission Sets exist
+    log_info "STEP 0/5: Checking ${#PERMISSION_SET_CONFIGS[@]} Permission Set(s)..."
     
     local ps_name
-    ps_name=$(jq -r '.name' "${ps_config}")
-    
-    if "${SCRIPT_DIR}/permission-set.sh" check --name "${ps_name}" &>/dev/null; then
-        log_success "Permission Set '${ps_name}' exists"
-    else
-        log_info "Permission Set '${ps_name}' not found, creating..."
-        if ! "${SCRIPT_DIR}/permission-set.sh" create --config "${ps_config}"; then
-            log_error "Failed to create Permission Set"
-            exit 1
+    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+        ps_name=$(jq -r '.name' "${ps_config}")
+        
+        if "${SCRIPT_DIR}/permission-set.sh" check --name "${ps_name}" &>/dev/null; then
+            log_success "Permission Set '${ps_name}' exists"
+        else
+            log_info "Permission Set '${ps_name}' not found, creating..."
+            if ! "${SCRIPT_DIR}/permission-set.sh" create --config "${ps_config}"; then
+                log_error "Failed to create Permission Set"
+                exit 1
+            fi
+            log_success "Permission Set created"
         fi
-        log_success "Permission Set created"
-    fi
+    done
     echo ""
     
     # Step 1: Create member account
@@ -284,16 +299,19 @@ create_user_environment() {
     log_success "User created: ${user_id}"
     echo ""
     
-    # Step 3: Assign Permission Set
-    log_info "STEP 3/5: Assigning Permission Set to account..."
-    if ! "${SCRIPT_DIR}/permission-set.sh" assign \
-        --user-id "${user_id}" \
-        --account-id "${account_id}" \
-        --permission-set "${ps_name}"; then
-        log_error "Failed to assign permissions"
-        exit 1
-    fi
-    log_success "Permissions assigned"
+    # Step 3: Assign Permission Sets
+    log_info "STEP 3/5: Assigning ${#PERMISSION_SET_CONFIGS[@]} Permission Set(s) to account..."
+    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+        ps_name=$(jq -r '.name' "${ps_config}")
+        if ! "${SCRIPT_DIR}/permission-set.sh" assign \
+            --user-id "${user_id}" \
+            --account-id "${account_id}" \
+            --permission-set "${ps_name}"; then
+            log_error "Failed to assign permission set '${ps_name}'"
+            exit 1
+        fi
+        log_success "Permission Set '${ps_name}' assigned"
+    done
     echo ""
     
     # Step 4: Create budget
@@ -342,7 +360,10 @@ create_user_environment() {
     echo "  Account Email:     ${account_email}"
     echo ""
     echo "Permissions:"
-    echo "  Permission Set:    ${ps_name}"
+    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+        ps_name=$(jq -r '.name' "${ps_config}")
+        echo "  Permission Set:    ${ps_name}"
+    done
     echo "  Status:            Assigned to account ${account_id}"
     echo ""
     echo "Budget:"
@@ -452,8 +473,7 @@ delete_user_environment() {
     log_warning "═══════════════════════════════════════════════════════════════════"
     echo ""
     log_warning "This will delete the following for user: ${username}"
-    echo "  • Identity Center user"
-    echo "  • Permission Set assignments"
+    echo "  • Identity Center user (assignments auto-cleaned)"
     echo "  • Budget (${budget_name})"
     echo "  • AWS Account (${account_name}) - OPTIONAL"
     echo ""
@@ -481,20 +501,9 @@ delete_user_environment() {
             --budget-name "${budget_name}" 2>/dev/null || log_warning "Budget not found or already deleted"
     fi
     
-    # Revoke permissions (get Permission Set name first)
-    if [[ -n "${user_id}" ]] && [[ -n "${account_id}" ]]; then
-        log_info "Revoking permissions..."
-        local ps_name
-        ps_name=$(jq -r '.name' "${PERMISSION_SET_CONFIG}")
-        "${SCRIPT_DIR}/permission-set.sh" revoke \
-            --user-id "${user_id}" \
-            --account-id "${account_id}" \
-            --permission-set "${ps_name}" 2>/dev/null || log_warning "Permissions not found or already revoked"
-    fi
-    
-    # Delete user (this is safe as user can only access the one account)
+    # Delete user (AWS will automatically clean up all permission set assignments)
     if [[ -n "${user_id}" ]]; then
-        log_info "Deleting Identity Center user..."
+        log_info "Deleting Identity Center user (permission assignments will be auto-cleaned)..."
         aws identitystore delete-user \
             --identity-store-id "$(aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text)" \
             --user-id "${user_id}" 2>/dev/null || log_warning "User not found or already deleted"
@@ -556,9 +565,6 @@ parse_arguments() {
             ;;
     esac
     
-    # Set default for permission set config
-    PERMISSION_SET_CONFIG="${DEFAULT_PERMISSION_SET_CONFIG}"
-    
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --username)
@@ -570,7 +576,7 @@ parse_arguments() {
                 shift 2
                 ;;
             --permission-set-config)
-                PERMISSION_SET_CONFIG="$2"
+                PERMISSION_SET_CONFIGS+=("$2")
                 shift 2
                 ;;
             --budget)
@@ -588,6 +594,11 @@ parse_arguments() {
                 ;;
         esac
     done
+    
+    # Set default permission set if none specified
+    if [[ ${#PERMISSION_SET_CONFIGS[@]} -eq 0 ]]; then
+        PERMISSION_SET_CONFIGS=("${DEFAULT_PERMISSION_SET_CONFIG}")
+    fi
 }
 
 validate_inputs() {
@@ -610,10 +621,12 @@ validate_inputs() {
                 log_error "Budget amount must be a positive integer"
                 exit 1
             fi
-            if [[ ! -f "${PERMISSION_SET_CONFIG}" ]]; then
-                log_error "Permission Set config file not found: ${PERMISSION_SET_CONFIG}"
-                exit 1
-            fi
+            for config in "${PERMISSION_SET_CONFIGS[@]}"; do
+                if [[ ! -f "${config}" ]]; then
+                    log_error "Permission Set config file not found: ${config}"
+                    exit 1
+                fi
+            done
             ;;
         show|delete)
             if [[ -z "${USERNAME}" ]]; then
@@ -635,7 +648,7 @@ main() {
     
     case "${COMMAND}" in
         create)
-            create_user_environment "${USERNAME}" "${USER_EMAIL}" "${BUDGET_AMOUNT}" "${PERMISSION_SET_CONFIG}"
+            create_user_environment "${USERNAME}" "${USER_EMAIL}" "${BUDGET_AMOUNT}"
             ;;
         list)
             list_user_environments

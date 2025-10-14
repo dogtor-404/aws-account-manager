@@ -138,6 +138,21 @@ All recipients must click "Confirm subscription" in each email to receive alerts
 **Note:** Account email is automatically generated using + notation.
 All emails will be received at the user's email address.
 
+### Create with Multiple Permission Sets
+
+```bash
+./account-manager.sh create \
+  --username alice \
+  --email alice@company.com \
+  --permission-set-config permission-sets/terraform-deployer.json \
+  --permission-set-config permission-sets/administrator.json
+```
+
+**Creates:**
+
+- User will have both TerraformDeployer and AdministratorAccess permissions
+- User can choose which permission set to use when logging in via SSO portal
+
 ### List All Users
 
 ```bash
