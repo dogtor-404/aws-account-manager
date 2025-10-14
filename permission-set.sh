@@ -117,7 +117,7 @@ Examples:
   $(basename "$0") assign \\
     --user-id xxxx-xxxx-xxxx \\
     --account-id 123456789012 \\
-    --permission-set TerraformDeployerPermissionSet
+    --permission-set TerraformDeployerPermissions
 
   # List assignments for an account
   $(basename "$0") list-assignments --account-id 123456789012
@@ -126,7 +126,7 @@ Examples:
   $(basename "$0") revoke \\
     --user-id xxxx-xxxx-xxxx \\
     --account-id 123456789012 \\
-    --permission-set TerraformDeployerPermissionSet
+    --permission-set TerraformDeployerPermissions
 
 EOF
 }

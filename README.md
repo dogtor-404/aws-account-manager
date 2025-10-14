@@ -19,8 +19,8 @@ Management Account
 │   ├── User: alice
 │   └── User: bob
 ├── Permission Sets
-│   ├── TerraformDeployer (default)
-│   └── AdministratorAccess
+│   ├── TerraformDeployerPermissions (default)
+│   └── AdministratorPermissions
 └── Budgets
     ├── alice-budget → tracks account 123456789012
     └── bob-budget → tracks account 234567890123
@@ -131,7 +131,7 @@ All recipients must click "Confirm subscription" in each email to receive alerts
 - AWS Account: `alice (123456789012)`
   - Account email auto-generated: `alice+alice-aws@company.com`
 - User Identity: `alice` (IAM Identity Center)
-- Permission: TerraformDeployer (assigned to account)
+- Permission: TerraformDeployerPermissions (assigned to account)
 - Budget: $100/month (automatic LinkedAccount tracking)
   - Alerts sent to: `alice@company.com` + management account email
 
@@ -144,13 +144,12 @@ All emails will be received at the user's email address.
 ./account-manager.sh create \
   --username alice \
   --email alice@company.com \
-  --permission-set-config permission-sets/terraform-deployer.json \
-  --permission-set-config permission-sets/administrator.json
+  --permission-sets "dev,admin"
 ```
 
 **Creates:**
 
-- User will have both TerraformDeployer and AdministratorAccess permissions
+- User will have both TerraformDeployerPermissions and AdministratorPermissions permissions
 - User can choose which permission set to use when logging in via SSO portal
 
 ### List All Users
@@ -205,10 +204,10 @@ For advanced usage or automation:
 
 ```bash
 # Create Permission Set (Infrastructure Deployer)
-./permission-set.sh create --config permission-sets/terraform-deployer.json
+./permission-set.sh create --config permission-sets/dev.json
 
 # Create Permission Set (Administrator)
-./permission-set.sh create --config permission-sets/administrator.json
+./permission-set.sh create --config permission-sets/admin.json
 
 # List Permission Sets
 ./permission-set.sh list
@@ -217,13 +216,13 @@ For advanced usage or automation:
 ./permission-set.sh assign \
   --user-id xxxx-xxxx \
   --account-id 123456789012 \
-  --permission-set TerraformDeployerPermissionSet
+  --permission-set TerraformDeployerPermissions
 
 # Assign Administrator access
 ./permission-set.sh assign \
   --user-id xxxx-xxxx \
   --account-id 123456789012 \
-  --permission-set AdministratorAccess
+  --permission-set AdministratorPermissions
 
 # List assignments
 ./permission-set.sh list-assignments --account-id 123456789012
@@ -232,7 +231,7 @@ For advanced usage or automation:
 ./permission-set.sh revoke \
   --user-id xxxx-xxxx \
   --account-id 123456789012 \
-  --permission-set TerraformDeployerPermissionSet
+  --permission-set TerraformDeployerPermissions
 ```
 
 ### Budgets
@@ -285,8 +284,8 @@ For advanced usage or automation:
 ├── permission-set.sh        # Permission Set definition + assignment
 ├── budget.sh                # Budget management (LinkedAccount)
 ├── permission-sets/         # Permission Set configs
-│   ├── terraform-deployer.json
-│   └── administrator.json
+│   ├── dev.json
+│   └── admin.json
 └── policies/                # IAM policies
     ├── terraform-deployer-permission-policy.json
     └── administrator-safeguards.json
@@ -368,7 +367,7 @@ aws s3 ls  # Test permissions
 
 ## Available Permission Sets
 
-### 1. TerraformDeployerPermissionSet (Default)
+### 1. TerraformDeployerPermissions (Default)
 
 **Best for:** Infrastructure deployment and management
 
@@ -384,13 +383,13 @@ aws s3 ls  # Test permissions
 
 **Session Duration:** 4 hours
 
-### 2. AdministratorAccess
+### 2. AdministratorPermissions
 
 **Best for:** Full administrative tasks and emergency access
 
 **Permissions:**
 
-- ✅ Full AdministratorAccess
+- ✅ Full administrative access
 - 🛡️ Account closure protection (denied)
 - 🛡️ Organization leave/delete protection (denied)
 - 🛡️ MFA device protection (denied for others' devices)
@@ -401,13 +400,13 @@ aws s3 ls  # Test permissions
 
 ```bash
 # Create the permission set
-./permission-set.sh create --config permission-sets/administrator.json
+./permission-set.sh create --config permission-sets/admin.json
 
 # Assign to a user
 ./permission-set.sh assign \
   --user-id xxxx-xxxx \
   --account-id 123456789012 \
-  --permission-set AdministratorAccess
+  --permission-set AdministratorPermissions
 ```
 
 ## Advanced: Custom Permission Sets
@@ -432,7 +431,7 @@ Then use it:
 ./account-manager.sh create \
   --username alice \
   --email alice@company.com \
-  --permission-set-config permission-sets/custom-developer.json
+  --permission-sets custom-developer
 ```
 
 ## Email Auto-Generation

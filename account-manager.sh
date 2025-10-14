@@ -138,7 +138,7 @@ Examples:
     --email charlie@company.com \\
     --permission-sets "terraform-deployer,administrator"
 
-  # User will have both TerraformDeployer and AdministratorAccess permissions
+  # User will have both TerraformDeployerPermissions and AdministratorPermissions permissions
 
   # Create organization administrator (NO dedicated account)
   $(basename "$0") create \\
@@ -279,7 +279,7 @@ classify_permission_sets() {
         ps_name=$(jq -r '.name' "${ps_config}")
         
         # Admin permission set goes to management account
-        if [[ "${ps_name}" == "AdministratorAccess" ]]; then
+        if [[ "${ps_name}" == "AdministratorPermissions" ]]; then
             mgmt_ps_configs+=("${ps_config}")
         else
             member_ps_configs+=("${ps_config}")
