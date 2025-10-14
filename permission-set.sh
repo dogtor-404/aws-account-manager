@@ -3,13 +3,21 @@
 ################################################################################
 # Permission Set Management Script
 #
-# Manages IAM Identity Center Permission Sets including creation, validation,
-# and policy attachment.
+# Unified management of IAM Identity Center Permission Sets:
+# - Definition (create, list, show, check)
+# - Assignment (assign to user + account, revoke, list assignments)
 #
 # Usage:
+#   # Definition Management
 #   ./permission-set.sh create --config CONFIG_FILE
+#   ./permission-set.sh list
 #   ./permission-set.sh check --name NAME
 #   ./permission-set.sh show --config CONFIG_FILE
+#
+#   # Assignment Management
+#   ./permission-set.sh assign --user-id ID --account-id ID --permission-set NAME
+#   ./permission-set.sh revoke --user-id ID --account-id ID --permission-set NAME
+#   ./permission-set.sh list-assignments --account-id ID
 #
 ################################################################################
 
@@ -31,6 +39,8 @@ readonly COLOR_WARNING='\033[0;33m'
 COMMAND=""
 CONFIG_FILE=""
 PERMISSION_SET_NAME=""
+USER_ID=""
+ACCOUNT_ID=""
 SSO_INSTANCE_ARN=""
 
 ################################################################################
@@ -55,31 +65,68 @@ log_warning() {
 
 usage() {
     cat << EOF
-Permission Set Management Script
+Permission Set Management - Unified Definition and Assignment
 
 Usage:
-  $(basename "$0") create --config CONFIG_FILE
+  # Permission Set Definition
+  $(basename "$0") create --config FILE
+  $(basename "$0") list
+  $(basename "$0") show --config FILE
   $(basename "$0") check --name NAME
-  $(basename "$0") show --config CONFIG_FILE
+
+  # Permission Assignment
+  $(basename "$0") assign \\
+    --user-id USER_ID \\
+    --account-id ACCOUNT_ID \\
+    --permission-set NAME
+  
+  $(basename "$0") revoke \\
+    --user-id USER_ID \\
+    --account-id ACCOUNT_ID \\
+    --permission-set NAME
+  
+  $(basename "$0") list-assignments --account-id ACCOUNT_ID
 
 Commands:
-  create    Create a new Permission Set from config file
-  check     Check if a Permission Set exists by name
-  show      Show details of a Permission Set
+  Definition Management:
+    create              Create a new Permission Set from config file
+    list                List all Permission Sets
+    show                Show Permission Set details
+    check               Check if Permission Set exists
+
+  Assignment Management:
+    assign              Assign Permission Set to user + account
+    revoke              Revoke Permission Set assignment
+    list-assignments    List assignments for an account
 
 Options:
-  --config FILE    Path to Permission Set configuration file (JSON)
-  --name NAME      Permission Set name to check
+  --config FILE         Path to Permission Set configuration file (JSON)
+  --name NAME           Permission Set name
+  --user-id ID          Identity Center user ID
+  --account-id ID       AWS account ID
+  --permission-set NAME Permission Set name for assignment
 
 Examples:
   # Create Permission Set
   $(basename "$0") create --config permission-sets/terraform-deployer.json
-  
-  # Check if exists
-  $(basename "$0") check --name TerraformDeployerPermissionSet
-  
-  # Show details
-  $(basename "$0") show --config permission-sets/terraform-deployer.json
+
+  # List all Permission Sets
+  $(basename "$0") list
+
+  # Assign to user + account
+  $(basename "$0") assign \\
+    --user-id xxxx-xxxx-xxxx \\
+    --account-id 123456789012 \\
+    --permission-set TerraformDeployerPermissionSet
+
+  # List assignments for an account
+  $(basename "$0") list-assignments --account-id 123456789012
+
+  # Revoke assignment
+  $(basename "$0") revoke \\
+    --user-id xxxx-xxxx-xxxx \\
+    --account-id 123456789012 \\
+    --permission-set TerraformDeployerPermissionSet
 
 EOF
 }
@@ -323,6 +370,281 @@ show_command() {
     log_info "Inline Policy: Attached"
 }
 
+list_permission_sets_command() {
+    log_info "Listing all Permission Sets..."
+    
+    local permission_sets
+    permission_sets=$(aws sso-admin list-permission-sets \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --output json)
+    
+    local ps_count
+    ps_count=$(echo "${permission_sets}" | jq '.PermissionSets | length')
+    
+    if [[ "${ps_count}" -eq 0 ]]; then
+        log_info "No Permission Sets found"
+        return 0
+    fi
+    
+    echo ""
+    echo "Permission Sets (Total: ${ps_count}):"
+    
+    for ps_arn in $(echo "${permission_sets}" | jq -r '.PermissionSets[]'); do
+        local ps_details
+        ps_details=$(aws sso-admin describe-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${ps_arn}" \
+            --output json)
+        
+        echo "${ps_details}" | jq -r '
+            "  - \(.PermissionSet.Name)",
+            "    Description: \(.PermissionSet.Description)",
+            "    Session: \(.PermissionSet.SessionDuration)"
+        '
+    done
+}
+
+get_permission_set_arn() {
+    local ps_name="$1"
+    
+    local permission_sets
+    permission_sets=$(aws sso-admin list-permission-sets \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --output json)
+    
+    for ps_arn in $(echo "${permission_sets}" | jq -r '.PermissionSets[]'); do
+        local name
+        name=$(aws sso-admin describe-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${ps_arn}" \
+            --query 'PermissionSet.Name' \
+            --output text)
+        
+        if [[ "${name}" == "${ps_name}" ]]; then
+            echo "${ps_arn}"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+check_assignment_exists() {
+    local user_id="$1"
+    local account_id="$2"
+    local ps_arn="$3"
+    
+    local assignments
+    assignments=$(aws sso-admin list-account-assignments \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --account-id "${account_id}" \
+        --permission-set-arn "${ps_arn}" \
+        --output json 2>/dev/null || echo '{"AccountAssignments":[]}')
+    
+    local exists
+    exists=$(echo "${assignments}" | jq -r ".AccountAssignments[] | 
+        select(.PrincipalId == \"${user_id}\" and .PrincipalType == \"USER\") | 
+        .PrincipalId")
+    
+    [[ -n "${exists}" ]]
+}
+
+assign_permission_set() {
+    local user_id="$1"
+    local account_id="$2"
+    local ps_name="$3"
+    
+    log_info "Assigning Permission Set '${ps_name}'..."
+    log_info "  User ID: ${user_id}"
+    log_info "  Account: ${account_id}"
+    
+    # Get Permission Set ARN
+    local ps_arn
+    if ! ps_arn=$(get_permission_set_arn "${ps_name}"); then
+        log_error "Permission Set '${ps_name}' not found"
+        exit 1
+    fi
+    
+    log_success "Found Permission Set ARN: ${ps_arn}"
+    
+    # Check if already assigned
+    if check_assignment_exists "${user_id}" "${account_id}" "${ps_arn}"; then
+        log_warning "Assignment already exists"
+        return 0
+    fi
+    
+    # Create assignment
+    local result
+    result=$(aws sso-admin create-account-assignment \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --target-id "${account_id}" \
+        --target-type AWS_ACCOUNT \
+        --permission-set-arn "${ps_arn}" \
+        --principal-type USER \
+        --principal-id "${user_id}" \
+        --output json)
+    
+    local request_id
+    request_id=$(echo "${result}" | jq -r '.AccountAssignmentCreationStatus.RequestId')
+    
+    log_info "Assignment request ID: ${request_id}"
+    log_info "Waiting for completion..."
+    
+    # Wait for completion
+    local max_attempts=24
+    local attempt=0
+    while [[ ${attempt} -lt ${max_attempts} ]]; do
+        local status_result
+        status_result=$(aws sso-admin describe-account-assignment-creation-status \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --account-assignment-creation-request-id "${request_id}" \
+            --output json)
+        
+        local status
+        status=$(echo "${status_result}" | jq -r '.AccountAssignmentCreationStatus.Status')
+        
+        case "${status}" in
+            "SUCCEEDED")
+                log_success "Permission Set assigned successfully"
+                return 0
+                ;;
+            "FAILED")
+                local reason
+                reason=$(echo "${status_result}" | jq -r '.AccountAssignmentCreationStatus.FailureReason // "Unknown"')
+                log_error "Assignment failed: ${reason}"
+                exit 2
+                ;;
+            "IN_PROGRESS")
+                sleep 5
+                ((attempt++))
+                ;;
+        esac
+    done
+    
+    log_error "Assignment timed out"
+    exit 2
+}
+
+revoke_permission_set() {
+    local user_id="$1"
+    local account_id="$2"
+    local ps_name="$3"
+    
+    log_info "Revoking Permission Set '${ps_name}'..."
+    log_info "  User ID: ${user_id}"
+    log_info "  Account: ${account_id}"
+    
+    # Get Permission Set ARN
+    local ps_arn
+    if ! ps_arn=$(get_permission_set_arn "${ps_name}"); then
+        log_error "Permission Set '${ps_name}' not found"
+        exit 1
+    fi
+    
+    # Delete assignment
+    local result
+    result=$(aws sso-admin delete-account-assignment \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --target-id "${account_id}" \
+        --target-type AWS_ACCOUNT \
+        --permission-set-arn "${ps_arn}" \
+        --principal-type USER \
+        --principal-id "${user_id}" \
+        --output json)
+    
+    local request_id
+    request_id=$(echo "${result}" | jq -r '.AccountAssignmentDeletionStatus.RequestId')
+    
+    log_info "Revocation request ID: ${request_id}"
+    log_info "Waiting for completion..."
+    
+    # Wait for completion
+    local max_attempts=24
+    local attempt=0
+    while [[ ${attempt} -lt ${max_attempts} ]]; do
+        local status_result
+        status_result=$(aws sso-admin describe-account-assignment-deletion-status \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --account-assignment-deletion-request-id "${request_id}" \
+            --output json)
+        
+        local status
+        status=$(echo "${status_result}" | jq -r '.AccountAssignmentDeletionStatus.Status')
+        
+        case "${status}" in
+            "SUCCEEDED")
+                log_success "Permission Set revoked successfully"
+                return 0
+                ;;
+            "FAILED")
+                local reason
+                reason=$(echo "${status_result}" | jq -r '.AccountAssignmentDeletionStatus.FailureReason // "Unknown"')
+                log_error "Revocation failed: ${reason}"
+                exit 2
+                ;;
+            "IN_PROGRESS")
+                sleep 5
+                ((attempt++))
+                ;;
+        esac
+    done
+    
+    log_error "Revocation timed out"
+    exit 2
+}
+
+list_assignments_by_account() {
+    local account_id="$1"
+    
+    log_info "Listing assignments for account ${account_id}..."
+    
+    # Get all Permission Sets
+    local permission_sets
+    permission_sets=$(aws sso-admin list-permission-sets \
+        --instance-arn "${SSO_INSTANCE_ARN}" \
+        --output json)
+    
+    echo ""
+    echo "Assignments for Account ${account_id}:"
+    echo ""
+    
+    local found_assignments=false
+    
+    # Iterate through each Permission Set
+    for ps_arn in $(echo "${permission_sets}" | jq -r '.PermissionSets[]'); do
+        local ps_name
+        ps_name=$(aws sso-admin describe-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${ps_arn}" \
+            --query 'PermissionSet.Name' \
+            --output text)
+        
+        # Get assignments for this Permission Set on this account
+        local assignments
+        assignments=$(aws sso-admin list-account-assignments \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --account-id "${account_id}" \
+            --permission-set-arn "${ps_arn}" \
+            --output json 2>/dev/null || echo '{"AccountAssignments":[]}')
+        
+        local count
+        count=$(echo "${assignments}" | jq '.AccountAssignments | length')
+        
+        if [[ "${count}" -gt 0 ]]; then
+            found_assignments=true
+            echo "Permission Set: ${ps_name}"
+            echo "${assignments}" | jq -r '.AccountAssignments[] | 
+                "  - \(.PrincipalType): \(.PrincipalId)"
+            '
+            echo ""
+        fi
+    done
+    
+    if [[ "${found_assignments}" == "false" ]]; then
+        log_info "No assignments found for this account"
+    fi
+}
+
 ################################################################################
 # Main Execution
 ################################################################################
@@ -337,7 +659,7 @@ parse_arguments() {
     shift
     
     case "${COMMAND}" in
-        create|check|show)
+        create|check|show|list|assign|revoke|list-assignments)
             ;;
         -h|--help)
             usage
@@ -358,6 +680,18 @@ parse_arguments() {
                 ;;
             --name)
                 PERMISSION_SET_NAME="$2"
+                shift 2
+                ;;
+            --permission-set)
+                PERMISSION_SET_NAME="$2"
+                shift 2
+                ;;
+            --user-id)
+                USER_ID="$2"
+                shift 2
+                ;;
+            --account-id)
+                ACCOUNT_ID="$2"
                 shift 2
                 ;;
             *)
@@ -383,6 +717,29 @@ validate_inputs() {
                 exit 1
             fi
             ;;
+        assign|revoke)
+            if [[ -z "${USER_ID}" ]]; then
+                log_error "--user-id is required for ${COMMAND} command"
+                exit 1
+            fi
+            if [[ -z "${ACCOUNT_ID}" ]]; then
+                log_error "--account-id is required for ${COMMAND} command"
+                exit 1
+            fi
+            if [[ -z "${PERMISSION_SET_NAME}" ]]; then
+                log_error "--permission-set is required for ${COMMAND} command"
+                exit 1
+            fi
+            ;;
+        list-assignments)
+            if [[ -z "${ACCOUNT_ID}" ]]; then
+                log_error "--account-id is required for list-assignments command"
+                exit 1
+            fi
+            ;;
+        list)
+            # No arguments required
+            ;;
     esac
 }
 
@@ -396,11 +753,23 @@ main() {
         create)
             create_permission_set "${CONFIG_FILE}"
             ;;
+        list)
+            list_permission_sets_command
+            ;;
         check)
             check_command "${PERMISSION_SET_NAME}"
             ;;
         show)
             show_command "${CONFIG_FILE}"
+            ;;
+        assign)
+            assign_permission_set "${USER_ID}" "${ACCOUNT_ID}" "${PERMISSION_SET_NAME}"
+            ;;
+        revoke)
+            revoke_permission_set "${USER_ID}" "${ACCOUNT_ID}" "${PERMISSION_SET_NAME}"
+            ;;
+        list-assignments)
+            list_assignments_by_account "${ACCOUNT_ID}"
             ;;
     esac
 }

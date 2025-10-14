@@ -1,17 +1,16 @@
 #!/bin/bash
 
 ################################################################################
-# User Manager - Main Orchestrator
+# User Manager - Multi-Account Orchestrator
 #
 # Main entry point for IAM Identity Center user lifecycle management.
-# Orchestrates permission-set.sh, iam-user.sh, and budget.sh to provide
-# complete user management workflows.
+# Orchestrates: org-account.sh, identity-user.sh, permission-set.sh, budget.sh
 #
 # Usage:
 #   ./user-manager.sh create --username NAME --email EMAIL [OPTIONS]
-#   ./user-manager.sh list-users
-#   ./user-manager.sh list-permission-sets  
-#   ./user-manager.sh list-budgets
+#   ./user-manager.sh list
+#   ./user-manager.sh show --username NAME
+#   ./user-manager.sh delete --username NAME
 #
 ################################################################################
 
@@ -39,7 +38,7 @@ DEFAULT_BUDGET=100
 # Global variables
 COMMAND=""
 USERNAME=""
-EMAIL_ADDRESS=""
+USER_EMAIL=""
 PERMISSION_SET_CONFIG=""
 BUDGET_AMOUNT="${DEFAULT_BUDGET}"
 
@@ -65,52 +64,65 @@ log_warning() {
 
 usage() {
     cat << EOF
-User Manager - IAM Identity Center Orchestrator
+User Manager - Multi-Account Orchestrator
+
+Simplified user environment creation: one command creates dedicated AWS account,
+Identity Center user, permissions, and budget with automatic cost tracking.
 
 Usage:
   $(basename "$0") create --username NAME --email EMAIL [OPTIONS]
-  $(basename "$0") list-users
-  $(basename "$0") list-permission-sets
-  $(basename "$0") list-budgets
+  $(basename "$0") list
+  $(basename "$0") show --username NAME
+  $(basename "$0") delete --username NAME
 
 Commands:
-  create                 Create complete user setup (user + Permission Set + budget)
-  list-users            List all IAM Identity Center users
-  list-permission-sets  List all Permission Sets
-  list-budgets          List all budgets
+  create    Create complete user environment (account + user + permissions + budget)
+  list      List all user environments
+  show      Show details for a user environment
+  delete    Delete user environment (with confirmation)
 
 Options for 'create':
-  --username NAME                Username for the IAM Identity Center user
-  --email EMAIL                  Email address for user activation and notifications
-  --permission-set-config FILE   Permission Set config file (default: ${DEFAULT_PERMISSION_SET_CONFIG})
-  --budget AMOUNT                Monthly budget amount in USD (default: ${DEFAULT_BUDGET})
+  --username NAME              Username for Identity Center user (e.g., alice)
+  --email EMAIL                User's email (also used to auto-generate account email)
+  --permission-set-config FILE Permission Set config (default: ${DEFAULT_PERMISSION_SET_CONFIG})
+  --budget AMOUNT              Monthly budget in USD (default: ${DEFAULT_BUDGET})
 
 Examples:
-  # Create user with defaults
+  # Create user environment with defaults
   $(basename "$0") create \\
-    --username Affyned-dev-user \\
-    --email neoztcl@gmail.com
+    --username alice \\
+    --email alice@company.com
 
-  # Create user with custom Permission Set and budget
+  # Account email auto-generated: alice+alice-aws@company.com
+
+  # Create with custom budget
   $(basename "$0") create \\
-    --username dev-alice \\
-    --email alice@company.com \\
-    --permission-set-config permission-sets/custom.json \\
+    --username neoz \\
+    --email neoztcl@gmail.com \\
     --budget 150
 
-  # List resources
-  $(basename "$0") list-users
-  $(basename "$0") list-permission-sets
-  $(basename "$0") list-budgets
+  # Account email auto-generated: neoztcl+neoz-aws@gmail.com
+
+  # List all user environments
+  $(basename "$0") list
+
+  # Show user details
+  $(basename "$0") show --username alice
+
+  # Delete user environment
+  $(basename "$0") delete --username alice
 
 Workflow:
-  1. Reads Permission Set configuration file
-  2. Checks if Permission Set exists
-     - If not exists: Creates Permission Set automatically
-     - If exists: Skips creation
-  3. Creates IAM Identity Center user
-  4. Assigns Permission Set to user
-  5. Creates budget with alerts
+  1. Auto-generate unique account email using + notation
+  2. Create AWS member account (e.g., alice-dev)
+  3. Create Identity Center user (alice)
+  4. Create/verify Permission Set
+  5. Assign Permission Set to user + account
+  6. Create budget with LinkedAccount filter (automatic cost tracking)
+
+Note: Account email is automatically generated from user email using + notation
+      Example: user@domain.com → user+username-aws@domain.com
+      All emails will be received at the user's email address.
 
 EOF
 }
@@ -122,7 +134,6 @@ EOF
 ensure_root_user() {
     log_info "Checking AWS identity..."
     
-    # Get current caller identity
     local identity
     identity=$(aws sts get-caller-identity --output json 2>/dev/null)
     
@@ -131,63 +142,32 @@ ensure_root_user() {
         exit 1
     fi
     
-    local arn user_id account_id
+    local arn account_id
     arn=$(echo "${identity}" | jq -r '.Arn')
-    user_id=$(echo "${identity}" | jq -r '.UserId')
     account_id=$(echo "${identity}" | jq -r '.Account')
     
-    # Check if current user is root user
-    # Root user ARN format: arn:aws:iam::ACCOUNT_ID:root
-    if [[ "${arn}" =~ arn:aws:iam::[0-9]+:root ]]; then
-        log_success "Running as AWS root user"
-        log_success "Account ID: ${account_id}"
-        return 0
+    # Check if running from management account (for Organizations)
+    local org_info
+    if ! org_info=$(aws organizations describe-organization --output json 2>&1); then
+        log_error "Not running from AWS Organizations management account"
+        log_error "This script requires Organizations management account access"
+        exit 1
     fi
     
-    # Not root user - show error and guidance
-    log_error "This script must be run by the AWS root user"
-    log_error "Current identity: ${arn}"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ⚠️  Root User Access Required"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "This script creates IAM Identity Center resources and requires"
-    echo "root user (AWS account owner) permissions."
-    echo ""
-    echo "How to switch to root user:"
-    echo ""
-    echo "1. Sign out of current AWS session:"
-    echo "   aws sso logout"
-    echo ""
-    echo "2. Login to AWS Console as root user:"
-    echo "   - Go to: https://console.aws.amazon.com/"
-    echo "   - Click: 'Sign in as Root user'"
-    echo "   - Use: Account email and password"
-    echo ""
-    echo "3. Create root user access keys (if not exists):"
-    echo "   - Console → IAM → My Security Credentials"
-    echo "   - Create Access Key"
-    echo ""
-    echo "4. Configure AWS CLI with root credentials:"
-    echo "   aws configure --profile root"
-    echo "   # Enter root user access key and secret key"
-    echo ""
-    echo "5. Run this script with root profile:"
-    echo "   AWS_PROFILE=root ./user-manager.sh create ..."
-    echo ""
-    echo "Or set as default:"
-    echo "   export AWS_PROFILE=root"
-    echo "   ./user-manager.sh create ..."
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
+    local mgmt_account_id
+    mgmt_account_id=$(echo "${org_info}" | jq -r '.Organization.MasterAccountId')
     
-    exit 1
+    if [[ "${account_id}" != "${mgmt_account_id}" ]]; then
+        log_error "Must run from management account ${mgmt_account_id}"
+        log_error "Currently using account ${account_id}"
+        exit 1
+    fi
+    
+    log_success "Running from management account: ${account_id}"
 }
 
 ensure_scripts_executable() {
-    local scripts=("permission-set.sh" "iam-user.sh" "budget.sh")
+    local scripts=("org-account.sh" "identity-user.sh" "permission-set.sh" "budget.sh")
     
     for script in "${scripts[@]}"; do
         local script_path="${SCRIPT_DIR}/${script}"
@@ -203,181 +183,310 @@ ensure_scripts_executable() {
     done
 }
 
-create_user_command() {
+create_user_environment() {
     local username="$1"
-    local email="$2"
-    local ps_config_file="$3"
-    local budget="$4"
+    local user_email="$2"
+    local budget="$3"
+    local ps_config="$4"
+    
+    # Auto-generate account email from user email using + notation
+    local account_email
+    local email_user email_domain
+    
+    if [[ "${user_email}" =~ ^([^@]+)@(.+)$ ]]; then
+        email_user="${BASH_REMATCH[1]}"
+        email_domain="${BASH_REMATCH[2]}"
+        account_email="${email_user}+${username}-aws@${email_domain}"
+    else
+        log_error "Invalid email format: ${user_email}"
+        exit 1
+    fi
+    
+    local account_name="${username}-dev"
     
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
-    echo "           IAM User Creation Workflow"
+    echo "    Creating Multi-Account Environment for ${username}"
     echo "═══════════════════════════════════════════════════════════════════"
     echo ""
     log_info "Configuration:"
-    log_info "  Username: ${username}"
-    log_info "  Email: ${email}"
-    log_info "  Permission Set Config: ${ps_config_file}"
-    log_info "  Budget: \$${budget}/month"
+    log_info "  Username:         ${username}"
+    log_info "  User Email:       ${user_email}"
+    log_info "  Account Name:     ${account_name}"
+    log_info "  Account Email:    ${account_email} (auto-generated)"
+    log_info "  Permission Set:   ${ps_config}"
+    log_info "  Budget:           \$${budget}/month"
     echo ""
     
-    # Validate config file exists
-    if [[ ! -f "${ps_config_file}" ]]; then
-        log_error "Permission Set config file not found: ${ps_config_file}"
-        exit 1
-    fi
-    
-    # Read Permission Set configuration
-    log_info "Reading Permission Set configuration..."
-    if ! command -v jq &> /dev/null; then
-        log_error "jq is not installed. Please install jq."
-        exit 1
-    fi
+    # Step 0: Ensure Permission Set exists
+    log_info "STEP 0/5: Checking Permission Set..."
     
     local ps_name
-    ps_name=$(jq -r '.name' "${ps_config_file}" 2>/dev/null)
+    ps_name=$(jq -r '.name' "${ps_config}")
     
-    if [[ -z "${ps_name}" ]] || [[ "${ps_name}" == "null" ]]; then
-        log_error "Failed to read Permission Set name from config file"
-        exit 1
-    fi
-    
-    log_success "Permission Set Name: ${ps_name}"
-    echo ""
-    
-    # Step 1: Check and create Permission Set if needed
-    log_info "STEP 1: Checking Permission Set..."
     if "${SCRIPT_DIR}/permission-set.sh" check --name "${ps_name}" &>/dev/null; then
-        log_success "Permission Set '${ps_name}' already exists"
+        log_success "Permission Set '${ps_name}' exists"
     else
         log_info "Permission Set '${ps_name}' not found, creating..."
-        "${SCRIPT_DIR}/permission-set.sh" create --config "${ps_config_file}"
+        if ! "${SCRIPT_DIR}/permission-set.sh" create --config "${ps_config}"; then
+            log_error "Failed to create Permission Set"
+            exit 1
+        fi
+        log_success "Permission Set created"
     fi
     echo ""
     
-    # Step 2: Check and create user, then assign Permission Set
-    log_info "STEP 2: Checking user..."
-    if "${SCRIPT_DIR}/iam-user.sh" check --username "${username}" &>/dev/null; then
-        log_success "User '${username}' already exists"
-    else
-        log_info "User '${username}' not found, creating and assigning Permission Set..."
-        "${SCRIPT_DIR}/iam-user.sh" create \
-            --username "${username}" \
-            --email "${email}" \
-            --permission-set-name "${ps_name}"
+    # Step 1: Create member account
+    log_info "STEP 1/5: Creating AWS member account..."
+    local account_id
+    if ! account_id=$("${SCRIPT_DIR}/org-account.sh" create \
+        --name "${account_name}" \
+        --email "${account_email}"); then
+        log_error "Failed to create account"
+        exit 1
     fi
+    log_success "Account created: ${account_id}"
     echo ""
     
-    # Step 3: Check and create user budget
-    log_info "STEP 3: Checking user budget..."
-    local budget_name="${username}-monthly-budget"
-    if "${SCRIPT_DIR}/budget.sh" check --name "${budget_name}" &>/dev/null; then
-        log_success "Budget '${budget_name}' already exists"
-    else
-        log_info "Budget '${budget_name}' not found, creating user-specific budget..."
-        "${SCRIPT_DIR}/budget.sh" create \
-            --username "${username}" \
-            --amount "${budget}" \
-            --email "${email}"
+    # Step 2: Create Identity Center user
+    log_info "STEP 2/5: Creating Identity Center user..."
+    local user_id
+    if ! user_id=$("${SCRIPT_DIR}/identity-user.sh" create \
+        --username "${username}" \
+        --email "${user_email}"); then
+        log_error "Failed to create user"
+        exit 1
     fi
+    log_success "User created: ${user_id}"
+    echo ""
+    
+    # Step 3: Assign Permission Set
+    log_info "STEP 3/5: Assigning Permission Set to account..."
+    if ! "${SCRIPT_DIR}/permission-set.sh" assign \
+        --user-id "${user_id}" \
+        --account-id "${account_id}" \
+        --permission-set "${ps_name}"; then
+        log_error "Failed to assign permissions"
+        exit 1
+    fi
+    log_success "Permissions assigned"
+    echo ""
+    
+    # Step 4: Create budget
+    log_info "STEP 4/5: Creating budget with automatic cost tracking..."
+    local budget_name="${account_name}-budget"
+    if ! "${SCRIPT_DIR}/budget.sh" create-linked \
+        --account-id "${account_id}" \
+        --name "${budget_name}" \
+        --amount "${budget}" \
+        --email "${user_email}"; then
+        log_error "Failed to create budget"
+        exit 1
+    fi
+    log_success "Budget created"
     echo ""
     
     # Final summary
     echo "═══════════════════════════════════════════════════════════════════"
-    echo "           Complete User Setup Summary"
+    echo "    ✅ Environment Ready!"
     echo "═══════════════════════════════════════════════════════════════════"
-    echo ""
-    echo "✅ All components created successfully!"
     echo ""
     echo "User Details:"
-    echo "  Username:      ${username}"
-    echo "  Email:         ${email}"
+    echo "  Username:          ${username}"
+    echo "  Email:             ${user_email}"
+    echo "  User ID:           ${user_id}"
     echo ""
-    echo "Permission Set:"
-    echo "  Name:          ${ps_name}"
-    echo "  Status:        Assigned"
+    echo "AWS Account:"
+    echo "  Account Name:      ${account_name}"
+    echo "  Account ID:        ${account_id}"
+    echo "  Account Email:     ${account_email}"
+    echo ""
+    echo "Permissions:"
+    echo "  Permission Set:    ${ps_name}"
+    echo "  Status:            Assigned to account ${account_id}"
     echo ""
     echo "Budget:"
-    echo "  Name:          ${budget_name}"
-    echo "  Amount:        \$${budget}/month"
-    echo "  Scope:         User-specific (tag: user=${username})"
-    echo "  Alerts:        80%, 90%, 100%"
+    echo "  Name:              ${budget_name}"
+    echo "  Amount:            \$${budget}/month"
+    echo "  Tracking:          LinkedAccount (automatic)"
+    echo "  Alerts:            80%, 90%, 100%"
     echo ""
-    echo "Next Steps for User (${email}):"
-    echo "  1. Check email for AWS activation link"
-    echo "  2. Set password via activation link"
-    echo "  3. Enable MFA (REQUIRED) using authenticator app"
-    echo "  4. Configure AWS CLI with SSO profile"
-    echo "  5. Confirm 3 budget alert email subscriptions"
+    echo "Next Steps for User:"
+    echo "  1. Check email (${user_email}) for:"
+    echo "     • IAM Identity Center activation link"
+    echo "     • 3 budget alert confirmation emails"
+    echo "  2. Click activation link and set password"
+    echo "  3. Enable MFA (REQUIRED)"
+    echo "  4. Confirm 3 budget alert subscriptions"
+    echo "  5. Get SSO portal URL:"
+    echo "     aws sso-admin list-instances --query 'Instances[0].[AccessUrl]' --output text"
+    echo "  6. Login and select '${account_name}' account"
     echo ""
-    echo "⚠️  IMPORTANT: Cost Allocation Tags Setup"
-    echo "  Budget is tracking resources with tag: user=${username}"
-    echo "  "
-    echo "  Required Actions:"
-    echo "  1. Verify tag activation: AWS Console → Billing → Cost Allocation Tags"
-    echo "     (Script attempted automatic activation - verify it succeeded)"
-    echo "  2. Wait up to 24 hours for tag data to appear in cost reports"
-    echo "  3. User MUST tag all resources with: user=${username}"
-    echo "     Example: aws ec2 run-instances --tags Key=user,Value=${username}"
+    echo "✨ All costs in account ${account_id} are automatically tracked!"
+    echo "   No resource tagging required!"
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
     echo ""
     
-    log_success "User creation workflow completed successfully!"
+    log_success "User environment creation completed successfully!"
 }
 
-list_users_command() {
-    "${SCRIPT_DIR}/iam-user.sh" list
-}
-
-list_permission_sets_command() {
-    log_info "Listing all Permission Sets..."
+list_user_environments() {
+    log_info "Listing user environments..."
     
-    # Get IAM Identity Center instance
-    local instances
-    instances=$(aws sso-admin list-instances --output json 2>/dev/null)
-    
-    if [[ -z "${instances}" ]] || [[ "$(echo "${instances}" | jq '.Instances | length')" -eq 0 ]]; then
-        log_error "No IAM Identity Center instance found"
-        exit 2
+    # Get all Identity Center users
+    local users
+    if ! users=$("${SCRIPT_DIR}/identity-user.sh" list 2>/dev/null); then
+        log_error "Failed to list users"
+        exit 1
     fi
     
-    local instance_arn
-    instance_arn=$(echo "${instances}" | jq -r '.Instances[0].InstanceArn')
+    echo ""
+    echo "User Environments:"
+    echo ""
     
-    local permission_sets
-    permission_sets=$(aws sso-admin list-permission-sets \
-        --instance-arn "${instance_arn}" \
-        --output json)
+    # Parse user list and find corresponding accounts
+    # This is a simplified approach - assumes username-dev naming convention
+    local account_list
+    account_list=$("${SCRIPT_DIR}/org-account.sh" list 2>/dev/null || echo "")
     
-    local ps_count
-    ps_count=$(echo "${permission_sets}" | jq '.PermissionSets | length')
+    if [[ -z "${account_list}" ]]; then
+        log_warning "No accounts found"
+        return 0
+    fi
     
-    if [[ "${ps_count}" -eq 0 ]]; then
-        log_info "No Permission Sets found"
+    echo "${account_list}"
+}
+
+show_user_environment() {
+    local username="$1"
+    local account_name="${username}-dev"
+    
+    log_info "Getting details for user: ${username}"
+    echo ""
+    
+    # Get user details
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Identity Center User"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    "${SCRIPT_DIR}/identity-user.sh" show --username "${username}" || log_warning "User not found"
+    
+    # Get account details
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  AWS Account"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local account_id
+    if account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null); then
+        echo "  Account Name: ${account_name}"
+        echo "  Account ID:   ${account_id}"
+        
+        # Get budget details
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Budget"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "${SCRIPT_DIR}/budget.sh" show --name "${account_name}-budget" || log_warning "Budget not found"
+        
+        # Get permission assignments
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Permission Assignments"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${account_id}" || log_warning "No assignments found"
+    else
+        log_warning "Account '${account_name}' not found"
+    fi
+    
+    echo ""
+}
+
+delete_user_environment() {
+    local username="$1"
+    local account_name="${username}-dev"
+    local budget_name="${account_name}-budget"
+    
+    echo ""
+    log_warning "═══════════════════════════════════════════════════════════════════"
+    log_warning "  ⚠️  DELETE USER ENVIRONMENT"
+    log_warning "═══════════════════════════════════════════════════════════════════"
+    echo ""
+    log_warning "This will delete the following for user: ${username}"
+    echo "  • Identity Center user"
+    echo "  • Permission Set assignments"
+    echo "  • Budget (${budget_name})"
+    echo "  • AWS Account (${account_name}) - OPTIONAL"
+    echo ""
+    echo -n "Are you sure you want to continue? Type 'yes' to confirm: "
+    read -r confirm
+    
+    if [[ "${confirm}" != "yes" ]]; then
+        log_info "Deletion cancelled"
         return 0
     fi
     
     echo ""
-    echo "Permission Sets (Total: ${ps_count}):"
+    log_info "Starting deletion process..."
     
-    for ps_arn in $(echo "${permission_sets}" | jq -r '.PermissionSets[]'); do
-        local ps_details
-        ps_details=$(aws sso-admin describe-permission-set \
-            --instance-arn "${instance_arn}" \
-            --permission-set-arn "${ps_arn}" \
-            --output json)
-        
-        echo "${ps_details}" | jq -r '
-            "  - \(.PermissionSet.Name)",
-            "    Description: \(.PermissionSet.Description)",
-            "    Session: \(.PermissionSet.SessionDuration)"
-        '
-    done
-}
-
-list_budgets_command() {
-    "${SCRIPT_DIR}/budget.sh" list
+    # Get IDs first
+    local user_id account_id
+    user_id=$("${SCRIPT_DIR}/identity-user.sh" get-id --username "${username}" 2>/dev/null || echo "")
+    account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null || echo "")
+    
+    # Delete budget
+    if [[ -n "${account_id}" ]]; then
+        log_info "Deleting budget..."
+        aws budgets delete-budget \
+            --account-id "$(aws sts get-caller-identity --query Account --output text)" \
+            --budget-name "${budget_name}" 2>/dev/null || log_warning "Budget not found or already deleted"
+    fi
+    
+    # Revoke permissions (get Permission Set name first)
+    if [[ -n "${user_id}" ]] && [[ -n "${account_id}" ]]; then
+        log_info "Revoking permissions..."
+        local ps_name
+        ps_name=$(jq -r '.name' "${PERMISSION_SET_CONFIG}")
+        "${SCRIPT_DIR}/permission-set.sh" revoke \
+            --user-id "${user_id}" \
+            --account-id "${account_id}" \
+            --permission-set "${ps_name}" 2>/dev/null || log_warning "Permissions not found or already revoked"
+    fi
+    
+    # Delete user (this is safe as user can only access the one account)
+    if [[ -n "${user_id}" ]]; then
+        log_info "Deleting Identity Center user..."
+        aws identitystore delete-user \
+            --identity-store-id "$(aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text)" \
+            --user-id "${user_id}" 2>/dev/null || log_warning "User not found or already deleted"
+    fi
+    
+    # Ask about account deletion
+    echo ""
+    log_warning "⚠️  AWS Account Deletion"
+    log_warning "Account: ${account_name} (${account_id})"
+    echo ""
+    log_warning "Note: AWS account deletion is a sensitive operation that:"
+    log_warning "  • Requires the account to be in good standing"
+    log_warning "  • Takes 90 days to complete"
+    log_warning "  • Cannot be undone"
+    echo ""
+    echo -n "Delete AWS account? (yes/no): "
+    read -r confirm_account
+    
+    if [[ "${confirm_account}" == "yes" ]]; then
+        log_warning "AWS account deletion not implemented in this script"
+        log_warning "To manually delete account ${account_id}:"
+        log_warning "  1. Go to: AWS Console → Organizations → Accounts"
+        log_warning "  2. Select account '${account_name}'"
+        log_warning "  3. Click 'Close account'"
+    else
+        log_info "Keeping AWS account ${account_name}"
+    fi
+    
+    echo ""
+    log_success "User environment deletion completed"
+    log_info "Remaining resources:"
+    log_info "  • AWS Account: ${account_name} (if not manually deleted)"
 }
 
 ################################################################################
@@ -394,7 +503,7 @@ parse_arguments() {
     shift
     
     case "${COMMAND}" in
-        create|list-users|list-permission-sets|list-budgets)
+        create|list|show|delete)
             ;;
         -h|--help)
             usage
@@ -417,7 +526,7 @@ parse_arguments() {
                 shift 2
                 ;;
             --email)
-                EMAIL_ADDRESS="$2"
+                USER_EMAIL="$2"
                 shift 2
                 ;;
             --permission-set-config)
@@ -444,16 +553,31 @@ validate_inputs() {
                 log_error "--username is required for create command"
                 exit 1
             fi
-            if [[ -z "${EMAIL_ADDRESS}" ]]; then
+            if [[ -z "${USER_EMAIL}" ]]; then
                 log_error "--email is required for create command"
+                exit 1
+            fi
+            # Validate email format
+            if ! [[ "${USER_EMAIL}" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                log_error "Invalid email format: ${USER_EMAIL}"
                 exit 1
             fi
             if ! [[ "${BUDGET_AMOUNT}" =~ ^[0-9]+$ ]]; then
                 log_error "Budget amount must be a positive integer"
                 exit 1
             fi
+            if [[ ! -f "${PERMISSION_SET_CONFIG}" ]]; then
+                log_error "Permission Set config file not found: ${PERMISSION_SET_CONFIG}"
+                exit 1
+            fi
             ;;
-        list-users|list-permission-sets|list-budgets)
+        show|delete)
+            if [[ -z "${USERNAME}" ]]; then
+                log_error "--username is required for ${COMMAND} command"
+                exit 1
+            fi
+            ;;
+        list)
             # No arguments required
             ;;
     esac
@@ -467,19 +591,18 @@ main() {
     
     case "${COMMAND}" in
         create)
-            create_user_command "${USERNAME}" "${EMAIL_ADDRESS}" "${PERMISSION_SET_CONFIG}" "${BUDGET_AMOUNT}"
+            create_user_environment "${USERNAME}" "${USER_EMAIL}" "${BUDGET_AMOUNT}" "${PERMISSION_SET_CONFIG}"
             ;;
-        list-users)
-            list_users_command
+        list)
+            list_user_environments
             ;;
-        list-permission-sets)
-            list_permission_sets_command
+        show)
+            show_user_environment "${USERNAME}"
             ;;
-        list-budgets)
-            list_budgets_command
+        delete)
+            delete_user_environment "${USERNAME}"
             ;;
     esac
 }
 
 main "$@"
-
