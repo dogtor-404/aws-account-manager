@@ -268,15 +268,15 @@ create_user_command() {
     fi
     echo ""
     
-    # Step 3: Check and create budget
-    log_info "STEP 3: Checking budget..."
+    # Step 3: Check and create user budget
+    log_info "STEP 3: Checking user budget..."
     local budget_name="${username}-monthly-budget"
     if "${SCRIPT_DIR}/budget.sh" check --name "${budget_name}" &>/dev/null; then
         log_success "Budget '${budget_name}' already exists"
     else
-        log_info "Budget '${budget_name}' not found, creating..."
+        log_info "Budget '${budget_name}' not found, creating user-specific budget..."
         "${SCRIPT_DIR}/budget.sh" create \
-            --name "${budget_name}" \
+            --username "${username}" \
             --amount "${budget}" \
             --email "${email}"
     fi
@@ -300,6 +300,7 @@ create_user_command() {
     echo "Budget:"
     echo "  Name:          ${budget_name}"
     echo "  Amount:        \$${budget}/month"
+    echo "  Scope:         User-specific (tag: user=${username})"
     echo "  Alerts:        80%, 90%, 100%"
     echo ""
     echo "Next Steps for User (${email}):"
@@ -308,6 +309,16 @@ create_user_command() {
     echo "  3. Enable MFA (REQUIRED) using authenticator app"
     echo "  4. Configure AWS CLI with SSO profile"
     echo "  5. Confirm 3 budget alert email subscriptions"
+    echo ""
+    echo "⚠️  IMPORTANT: Cost Allocation Tags Setup"
+    echo "  Budget is tracking resources with tag: user=${username}"
+    echo "  "
+    echo "  Required Actions:"
+    echo "  1. Go to: AWS Console → Billing → Cost Allocation Tags"
+    echo "  2. Activate the 'user' tag"
+    echo "  3. Wait up to 24 hours for tag data to appear"
+    echo "  4. User MUST tag all resources with: user=${username}"
+    echo "     Example: aws ec2 run-instances --tags Key=user,Value=${username}"
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
     echo ""

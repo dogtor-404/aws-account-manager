@@ -31,6 +31,7 @@ COMMAND=""
 BUDGET_NAME=""
 BUDGET_AMOUNT=""
 EMAIL_ADDRESS=""
+USERNAME=""
 ACCOUNT_ID=""
 
 # Default alert thresholds
@@ -62,6 +63,7 @@ Budget Management Script
 
 Usage:
   $(basename "$0") create --name NAME --amount AMOUNT --email EMAIL
+  $(basename "$0") create --username NAME --amount AMOUNT --email EMAIL
   $(basename "$0") check --name NAME  
   $(basename "$0") list
 
@@ -70,14 +72,24 @@ Commands:
   check     Check if a budget exists
   list      List all budgets
 
-Options:
-  --name NAME      Budget name
-  --amount AMOUNT  Monthly budget amount in USD
-  --email EMAIL    Email address for alerts
+Options for 'create':
+  --name NAME       Budget name (required for account-level budget)
+  --amount AMOUNT   Monthly budget amount in USD
+  --email EMAIL     Email address for budget alerts
+  --username NAME   Username for user-specific budget (auto-generates budget name)
 
 Examples:
-  # Create budget
-  $(basename "$0") create --name user-budget --amount 100 --email user@example.com
+  # Create account-level budget
+  $(basename "$0") create \\
+    --name "account-monthly-budget" \\
+    --amount 1000 \\
+    --email admin@company.com
+
+  # Create user-specific budget with tag filter
+  $(basename "$0") create \\
+    --username alice \\
+    --amount 100 \\
+    --email alice@company.com
   
   # Check if exists
   $(basename "$0") check --name user-budget
@@ -162,6 +174,52 @@ create_budget() {
     log_success "Alert thresholds: 80%, 90%, 100%"
     echo ""
     log_info "IMPORTANT: Check ${email} for 3 confirmation emails from AWS Notifications"
+    log_info "You must click 'Confirm subscription' in each email to receive alerts"
+}
+
+create_user_budget() {
+    local amount="$1"
+    local email="$2"
+    local username="$3"
+    
+    # 自动生成 budget name
+    local name="${username}-monthly-budget"
+    
+    log_info "Creating user-specific budget: ${name}"
+    log_info "  Amount: \$${amount}/month"
+    log_info "  Email: ${email}"
+    log_info "  Tag Filter: user=${username}"
+    
+    # Check if already exists
+    if check_budget_exists "${name}"; then
+        log_warning "Budget '${name}' already exists"
+        return 0
+    fi
+    
+    # Create budget with CostFilters for user tag
+    log_info "Creating budget with user tag filter and alert thresholds (80%, 90%, 100%)..."
+    
+    aws budgets create-budget \
+        --account-id "${ACCOUNT_ID}" \
+        --budget "BudgetName=${name},BudgetLimit={Amount=${amount},Unit=USD},TimeUnit=MONTHLY,BudgetType=COST,CostFilters={TagKeyValue=[user\$${username}]}" \
+        --notifications-with-subscribers \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=80,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=90,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=100,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
+        2>&1 | grep -v "^$" || true
+    
+    log_success "User budget created successfully"
+    log_success "Budget: ${name} - \$${amount}/month"
+    log_success "Tag Filter: user=${username}"
+    log_success "Alert thresholds: 80%, 90%, 100%"
+    echo ""
+    log_warning "IMPORTANT: Cost Allocation Tags must be activated!"
+    log_warning "1. Go to AWS Console → Billing → Cost Allocation Tags"
+    log_warning "2. Activate the 'user' tag"
+    log_warning "3. Wait up to 24 hours for tag data to appear in cost reports"
+    log_warning "4. User MUST tag all resources with: user=${username}"
+    echo ""
+    log_info "Check ${email} for 3 confirmation emails from AWS Notifications"
     log_info "You must click 'Confirm subscription' in each email to receive alerts"
 }
 
@@ -258,6 +316,10 @@ parse_arguments() {
                 EMAIL_ADDRESS="$2"
                 shift 2
                 ;;
+            --username)
+                USERNAME="$2"
+                shift 2
+                ;;
             *)
                 log_error "Unknown argument: $1"
                 usage
@@ -270,18 +332,32 @@ parse_arguments() {
 validate_inputs() {
     case "${COMMAND}" in
         create)
-            if [[ -z "${BUDGET_NAME}" ]]; then
-                log_error "--name is required for create command"
-                exit 1
+            if [[ -n "${USERNAME}" ]]; then
+                # 用户级别预算：只需要 amount, email, username
+                if [[ -z "${BUDGET_AMOUNT}" ]]; then
+                    log_error "--amount is required for create command"
+                    exit 1
+                fi
+                if [[ -z "${EMAIL_ADDRESS}" ]]; then
+                    log_error "--email is required for create command"
+                    exit 1
+                fi
+            else
+                # 账户级别预算：需要 name, amount, email
+                if [[ -z "${BUDGET_NAME}" ]]; then
+                    log_error "--name is required for create command (unless --username is provided)"
+                    exit 1
+                fi
+                if [[ -z "${BUDGET_AMOUNT}" ]]; then
+                    log_error "--amount is required for create command"
+                    exit 1
+                fi
+                if [[ -z "${EMAIL_ADDRESS}" ]]; then
+                    log_error "--email is required for create command"
+                    exit 1
+                fi
             fi
-            if [[ -z "${BUDGET_AMOUNT}" ]]; then
-                log_error "--amount is required for create command"
-                exit 1
-            fi
-            if [[ -z "${EMAIL_ADDRESS}" ]]; then
-                log_error "--email is required for create command"
-                exit 1
-            fi
+            
             if ! [[ "${BUDGET_AMOUNT}" =~ ^[0-9]+$ ]]; then
                 log_error "Budget amount must be a positive integer"
                 exit 1
@@ -307,7 +383,11 @@ main() {
     
     case "${COMMAND}" in
         create)
-            create_budget "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${EMAIL_ADDRESS}"
+            if [[ -n "${USERNAME}" ]]; then
+                create_user_budget "${BUDGET_AMOUNT}" "${EMAIL_ADDRESS}" "${USERNAME}"
+            else
+                create_budget "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${EMAIL_ADDRESS}"
+            fi
             ;;
         check)
             check_command "${BUDGET_NAME}"
