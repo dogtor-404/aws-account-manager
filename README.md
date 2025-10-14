@@ -19,7 +19,8 @@ Management Account
 │   ├── User: alice
 │   └── User: bob
 ├── Permission Sets
-│   └── TerraformDeployer
+│   ├── TerraformDeployer (default)
+│   └── AdministratorAccess
 └── Budgets
     ├── alice-dev-budget → tracks account 123456789012
     └── bob-dev-budget → tracks account 234567890123
@@ -188,8 +189,11 @@ For advanced usage or automation:
 ### Permission Sets
 
 ```bash
-# Create Permission Set
+# Create Permission Set (Infrastructure Deployer)
 ./permission-set.sh create --config permission-sets/terraform-deployer.json
+
+# Create Permission Set (Administrator)
+./permission-set.sh create --config permission-sets/administrator.json
 
 # List Permission Sets
 ./permission-set.sh list
@@ -199,6 +203,12 @@ For advanced usage or automation:
   --user-id xxxx-xxxx \
   --account-id 123456789012 \
   --permission-set TerraformDeployerPermissionSet
+
+# Assign Administrator access
+./permission-set.sh assign \
+  --user-id xxxx-xxxx \
+  --account-id 123456789012 \
+  --permission-set AdministratorAccess
 
 # List assignments
 ./permission-set.sh list-assignments --account-id 123456789012
@@ -260,9 +270,11 @@ For advanced usage or automation:
 ├── permission-set.sh        # Permission Set definition + assignment
 ├── budget.sh                # Budget management (LinkedAccount)
 ├── permission-sets/         # Permission Set configs
-│   └── terraform-deployer.json
+│   ├── terraform-deployer.json
+│   └── administrator.json
 └── policies/                # IAM policies
-    └── terraform-deployer-permission-policy.json
+    ├── terraform-deployer-permission-policy.json
+    └── administrator-safeguards.json
 ```
 
 ## Verification
@@ -338,6 +350,50 @@ aws s3 ls  # Test permissions
 3. ✅ **Session Duration** - Default 12 hours (configurable in Permission Set)
 4. ✅ **Budget Alerts** - Always confirm email subscriptions
 5. ✅ **Account Isolation** - Each user in separate account
+
+## Available Permission Sets
+
+### 1. TerraformDeployerPermissionSet (Default)
+
+**Best for:** Infrastructure deployment and management
+
+**Permissions:**
+
+- ✅ PowerUserAccess (full infrastructure control)
+- ✅ IAM Role/Policy management
+- ✅ Instance Profile management
+- ❌ IAM User management (denied)
+- ❌ Billing/Account changes (denied)
+- ❌ Organization changes (denied)
+- ❌ Security service disruption (denied)
+
+**Session Duration:** 4 hours
+
+### 2. AdministratorAccess
+
+**Best for:** Full administrative tasks and emergency access
+
+**Permissions:**
+
+- ✅ Full AdministratorAccess
+- 🛡️ Account closure protection (denied)
+- 🛡️ Organization leave/delete protection (denied)
+- 🛡️ MFA device protection (denied for others' devices)
+
+**Session Duration:** 8 hours
+
+**Usage:**
+
+```bash
+# Create the permission set
+./permission-set.sh create --config permission-sets/administrator.json
+
+# Assign to a user
+./permission-set.sh assign \
+  --user-id xxxx-xxxx \
+  --account-id 123456789012 \
+  --permission-set AdministratorAccess
+```
 
 ## Advanced: Custom Permission Sets
 

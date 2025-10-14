@@ -1,0 +1,10 @@
+{
+  "name": "AdministratorAccess",
+  "description": "Full administrator access with critical account protection safeguards",
+  "session_duration": "PT8H",
+  "managed_policies": [
+    "AdministratorAccess"
+  ],
+  "inline_policy_file": "policies/administrator-safeguards.json"
+}
+

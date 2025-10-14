@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PreventAccountDestruction",
+      "Effect": "Deny",
+      "Action": [
+        "account:CloseAccount",
+        "organizations:LeaveOrganization",
+        "organizations:DeleteOrganization"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProtectMFADevices",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteVirtualMFADevice"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:username": "${aws:username}"
+        }
+      }
+    }
+  ]
+}
+
