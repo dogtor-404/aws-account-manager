@@ -87,7 +87,7 @@ Examples:
   # Create budget for member account
   $(basename "$0") create-linked \\
     --account-id 123456789012 \\
-    --name "alice-dev-budget" \\
+    --name "alice-budget" \\
     --amount 100 \\
     --notification-emails "alice@company.com,admin@company.com"
 
@@ -98,13 +98,13 @@ Examples:
     --notification-emails "admin@company.com,finance@company.com"
   
   # Check if budget exists
-  $(basename "$0") check --name "alice-dev-budget"
+  $(basename "$0") check --name "alice-budget"
   
   # List all budgets
   $(basename "$0") list
 
   # Show budget details
-  $(basename "$0") show --name "alice-dev-budget"
+  $(basename "$0") show --name "alice-budget"
 
 Note: Budgets are created in the management account and track costs via LinkedAccount filter.
       No resource tagging required - costs are automatically tracked by account!

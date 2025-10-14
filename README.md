@@ -8,7 +8,7 @@ One Command = Complete Isolated Environment
 
 Each user gets:
 
-- ✅ Dedicated AWS account (e.g., `alice-dev`)
+- ✅ Dedicated AWS account (e.g., `alice`)
 - ✅ Identity Center authentication
 - ✅ Automatic cost tracking via LinkedAccount (no tagging needed)
 - ✅ Budget alerts at 80%, 90%, 100%
@@ -22,12 +22,12 @@ Management Account
 │   ├── TerraformDeployer (default)
 │   └── AdministratorAccess
 └── Budgets
-    ├── alice-dev-budget → tracks account 123456789012
-    └── bob-dev-budget → tracks account 234567890123
+    ├── alice-budget → tracks account 123456789012
+    └── bob-budget → tracks account 234567890123
 
 Member Accounts (isolated)
-├── alice-dev (123456789012) ← alice has access
-└── bob-dev (234567890123) ← bob has access
+├── alice (123456789012) ← alice has access
+└── bob (234567890123) ← bob has access
 ```
 
 ## Prerequisites
@@ -128,7 +128,7 @@ All recipients must click "Confirm subscription" in each email to receive alerts
 
 **Creates:**
 
-- AWS Account: `alice-dev (123456789012)`
+- AWS Account: `alice (123456789012)`
   - Account email auto-generated: `alice+alice-aws@company.com`
 - User Identity: `alice` (IAM Identity Center)
 - Permission: TerraformDeployer (assigned to account)
@@ -164,10 +164,10 @@ For advanced usage or automation:
 
 ```bash
 # Create member account
-./org-account.sh create --name alice-dev --email alice-aws@company.com
+./org-account.sh create --name alice --email alice-aws@company.com
 
 # Get account ID
-./org-account.sh get-id --name alice-dev
+./org-account.sh get-id --name alice
 
 # List all accounts
 ./org-account.sh list
@@ -226,7 +226,7 @@ For advanced usage or automation:
 # Create budget for member account
 ./budget.sh create-linked \
   --account-id 123456789012 \
-  --name alice-dev-budget \
+  --name alice-budget \
   --amount 100 \
   --email alice@company.com
 
@@ -240,7 +240,7 @@ For advanced usage or automation:
 ./budget.sh list
 
 # Show budget details
-./budget.sh show --name alice-dev-budget
+./budget.sh show --name alice-budget
 ```
 
 ## User Login Flow
@@ -256,7 +256,7 @@ For advanced usage or automation:
    aws sso-admin list-instances --query 'Instances[0].[AccessUrl]' --output text
    ```
 
-5. User logs in at portal and selects their account (e.g., `alice-dev`)
+5. User logs in at portal and selects their account (e.g., `alice`)
 6. User works in isolated environment
 
 **✨ No resource tagging required!** All costs automatically tracked via LinkedAccount.

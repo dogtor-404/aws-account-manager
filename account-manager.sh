@@ -126,7 +126,7 @@ Examples:
 
 Workflow:
   1. Auto-generate unique account email using + notation
-  2. Create AWS member account (e.g., alice-dev)
+  2. Create AWS member account (e.g., alice)
   3. Create Identity Center user (alice)
   4. Create/verify Permission Set
   5. Assign Permission Set to user + account
@@ -226,7 +226,7 @@ create_user_environment() {
         exit 1
     fi
     
-    local account_name="${username}-dev"
+    local account_name="${username}"
     
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
@@ -386,7 +386,7 @@ list_user_environments() {
     echo ""
     
     # Parse user list and find corresponding accounts
-    # This is a simplified approach - assumes username-dev naming convention
+    # This is a simplified approach - assumes username naming convention
     local account_list
     account_list=$("${SCRIPT_DIR}/org-account.sh" list 2>/dev/null || echo "")
     
@@ -400,7 +400,7 @@ list_user_environments() {
 
 show_user_environment() {
     local username="$1"
-    local account_name="${username}-dev"
+    local account_name="${username}"
     
     log_info "Getting details for user: ${username}"
     echo ""
@@ -443,7 +443,7 @@ show_user_environment() {
 
 delete_user_environment() {
     local username="$1"
-    local account_name="${username}-dev"
+    local account_name="${username}"
     local budget_name="${account_name}-budget"
     
     echo ""

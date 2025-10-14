@@ -71,7 +71,7 @@ Commands:
   check     Check if an account exists by ID
 
 Options for 'create':
-  --name NAME       Account name (e.g., alice-dev)
+  --name NAME       Account name (e.g., alice)
   --email EMAIL     Unique email for the account (e.g., alice-aws@company.com)
 
 Options for 'get-id':
@@ -82,10 +82,10 @@ Options for 'check':
 
 Examples:
   # Create member account
-  $(basename "$0") create --name alice-dev --email alice-aws@company.com
+  $(basename "$0") create --name alice --email alice-aws@company.com
   
   # Get account ID by name
-  $(basename "$0") get-id --name alice-dev
+  $(basename "$0") get-id --name alice
   
   # List all accounts
   $(basename "$0") list
