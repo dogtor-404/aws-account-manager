@@ -101,11 +101,11 @@ Examples:
 
   # Create with custom budget
   $(basename "$0") create \\
-    --username neoz \\
-    --email neoztcl@gmail.com \\
+    --username bob \\
+    --email bob@company.com \\
     --budget 150
 
-  # Account email auto-generated: neoztcl+neoz-aws@gmail.com
+  # Account email auto-generated: bob+bob-aws@company.com
 
   # Create with additional notification emails
   $(basename "$0") create \\

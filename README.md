@@ -340,6 +340,6 @@ The script automatically generates a unique account email for each AWS account u
 **Examples:**
 
 - User email: `alice@company.com` → Account email: `alice+alice-aws@company.com`
-- User email: `neoztcl@gmail.com` → Account email: `neoztcl+neoz-aws@gmail.com`
+- User email: `bob@company.com` → Account email: `bob+bob-aws@company.com`
 
 **All emails are received at the user's email address.** Gmail and most email providers ignore the + suffix, so all notifications go to one inbox.
