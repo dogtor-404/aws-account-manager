@@ -213,11 +213,31 @@ create_user_budget() {
     log_success "Tag Filter: user=${username}"
     log_success "Alert thresholds: 80%, 90%, 100%"
     echo ""
-    log_warning "IMPORTANT: Cost Allocation Tags must be activated!"
-    log_warning "1. Go to AWS Console → Billing → Cost Allocation Tags"
-    log_warning "2. Activate the 'user' tag"
-    log_warning "3. Wait up to 24 hours for tag data to appear in cost reports"
-    log_warning "4. User MUST tag all resources with: user=${username}"
+    
+    # 尝试自动激活 cost allocation tag
+    log_info "Attempting to activate cost allocation tag 'user'..."
+    local activation_result
+    if activation_result=$(aws ce update-cost-allocation-tags-status \
+        --cost-allocation-tags-status TagKey=user,Status=Active 2>&1); then
+        log_success "Cost allocation tag 'user' activated successfully"
+        log_info "Tag data will appear in cost reports within 24 hours"
+    else
+        # 检查是否因为标签已经激活而失败
+        if echo "${activation_result}" | grep -q "already active\|already activated" 2>/dev/null; then
+            log_info "Cost allocation tag 'user' is already active"
+        else
+            log_warning "Could not activate tag automatically (may require billing permissions)"
+            log_warning "Error: ${activation_result}"
+            log_warning "Please activate manually: AWS Console → Billing → Cost Allocation Tags"
+        fi
+    fi
+    echo ""
+    
+    log_warning "IMPORTANT: Cost Allocation Tags Configuration"
+    log_warning "1. Verify tag is active: AWS Console → Billing → Cost Allocation Tags"
+    log_warning "2. Wait up to 24 hours for tag data to appear in cost reports"
+    log_warning "3. User MUST tag all resources with: user=${username}"
+    log_warning "   Example: aws ec2 run-instances --tags Key=user,Value=${username}"
     echo ""
     log_info "Check ${email} for 3 confirmation emails from AWS Notifications"
     log_info "You must click 'Confirm subscription' in each email to receive alerts"
