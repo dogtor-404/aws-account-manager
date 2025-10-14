@@ -92,9 +92,19 @@ Commands:
 Options for 'create':
   --username NAME              Username for Identity Center user (e.g., alice)
   --email EMAIL                User's email (also used to auto-generate account email)
-  --permission-sets NAMES      Permission Set names, comma-separated (e.g., "terraform-deployer,administrator")
-                               (default: ${DEFAULT_PERMISSION_SET_CONFIG})
+  --permission-sets NAMES      Permission Set names, comma-separated (default: ${DEFAULT_PERMISSION_SET_CONFIG})
+                               
+                               ⚠️  Permission Set Assignment Rules:
+                               • 'admin' → Management Account (organization-wide access)
+                               • Others (dev, terraform-deployer, etc.) → Member Account
+                               
+                               Examples:
+                               • admin              → Management Account only
+                               • dev                → Member Account only
+                               • "admin,dev"        → BOTH accounts (dual assignment)
+                               
   --budget AMOUNT              Monthly budget in USD (default: ${DEFAULT_BUDGET})
+                               Note: Only applies to member account (not management)
   --notification-emails EMAILS Additional emails for budget alerts (comma-separated, optional)
                                Note: User and admin emails are always included
 
@@ -130,6 +140,23 @@ Examples:
 
   # User will have both TerraformDeployer and AdministratorAccess permissions
 
+  # Create organization administrator (NO dedicated account)
+  $(basename "$0") create \\
+    --username org-admin \\
+    --email admin@company.com \\
+    --permission-sets admin
+
+  # User assigned to Management Account only, no budget tracking
+
+  # Create dual-access user (organization admin + sandbox account)
+  $(basename "$0") create \\
+    --username power-user \\
+    --email power@company.com \\
+    --permission-sets "admin,dev" \\
+    --budget 200
+
+  # User has BOTH: Management Account access + dedicated sandbox with budget
+
   # List all user environments
   $(basename "$0") list
 
@@ -140,16 +167,29 @@ Examples:
   $(basename "$0") delete --username alice
 
 Workflow:
-  1. Auto-generate unique account email using + notation
-  2. Create AWS member account (e.g., alice)
-  3. Create Identity Center user (alice)
-  4. Create/verify Permission Set
-  5. Assign Permission Set to user + account
-  6. Create budget with LinkedAccount filter (automatic cost tracking)
+  1. Parse and classify permission sets:
+     • 'admin' → management account category
+     • Others → member account category
+  2. Create member account (if non-admin permission sets exist)
+  3. Create Identity Center user
+  4. Assign admin permissions to Management Account (if admin specified)
+  5. Assign other permissions to member account (if created)
+  6. Create budget for member account (if created)
+
+Permission Assignment Examples:
+  • --permission-sets admin
+    → User to Management Account only (no member account)
+  
+  • --permission-sets dev
+    → Create member account, assign dev to it
+  
+  • --permission-sets "admin,dev"
+    → Create member account, assign admin to Management, dev to member account
 
 Note: Account email is automatically generated from user email using + notation
       Example: user@domain.com → user+username-aws@domain.com
       All emails will be received at the user's email address.
+      (Not applicable for admin users - no dedicated account created)
 
 EOF
 }
@@ -222,58 +262,48 @@ ensure_scripts_executable() {
     done
 }
 
-create_user_environment() {
-    local username="$1"
-    local user_email="$2"
-    local budget="$3"
-    local permission_sets="$4"  # Comma-separated permission set names
+################################################################################
+# Permission Set Classification and Utility Functions
+################################################################################
+
+# Classify permission sets into management account and member account categories
+# Sets global arrays: mgmt_ps_configs, member_ps_configs
+classify_permission_sets() {
+    local ps_config_files=("$@")
     
-    # Auto-generate account email from user email using + notation
-    local account_email
-    local email_user email_domain
+    mgmt_ps_configs=()
+    member_ps_configs=()
     
-    if [[ "${user_email}" =~ ^([^@]+)@(.+)$ ]]; then
-        email_user="${BASH_REMATCH[1]}"
-        email_domain="${BASH_REMATCH[2]}"
-        account_email="${email_user}+${username}-aws@${email_domain}"
-    else
-        log_error "Invalid email format: ${user_email}"
-        exit 1
-    fi
-    
-    local account_name="${username}"
-    
-    # Parse comma-separated permission sets and build config file paths
-    IFS=',' read -ra ps_names <<< "${permission_sets}"
-    local ps_config_files=()
-    for ps_name in "${ps_names[@]}"; do
-        # Trim whitespace
-        ps_name=$(echo "${ps_name}" | xargs)
-        ps_config_files+=("permission-sets/${ps_name}.json")
-    done
-    
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════════"
-    echo "    Creating Multi-Account Environment for ${username}"
-    echo "═══════════════════════════════════════════════════════════════════"
-    echo ""
-    log_info "Configuration:"
-    log_info "  Username:         ${username}"
-    log_info "  User Email:       ${user_email}"
-    log_info "  Account Name:     ${account_name}"
-    log_info "  Account Email:    ${account_email} (auto-generated)"
-    log_info "  Permission Sets:  ${#ps_config_files[@]} config(s)"
     for ps_config in "${ps_config_files[@]}"; do
-        log_info "    - ${ps_config}"
+        local ps_name
+        ps_name=$(jq -r '.name' "${ps_config}")
+        
+        # Admin permission set goes to management account
+        if [[ "${ps_name}" == "AdministratorAccess" ]]; then
+            mgmt_ps_configs+=("${ps_config}")
+        else
+            member_ps_configs+=("${ps_config}")
+        fi
     done
-    log_info "  Budget:           \$${budget}/month"
-    echo ""
+}
+
+# Determine if member account should be created based on permission sets
+should_create_member_account() {
+    local member_ps_count=$1
+    [[ ${member_ps_count} -gt 0 ]]
+}
+
+################################################################################
+# User Environment Creation - Sub-functions
+################################################################################
+
+ensure_permission_sets_exist() {
+    local all_ps_configs=("${mgmt_ps_configs[@]}" "${member_ps_configs[@]}")
     
-    # Step 0: Ensure Permission Sets exist
-    log_info "STEP 0/5: Checking ${#ps_config_files[@]} Permission Set(s)..."
+    log_info "STEP 0: Checking ${#all_ps_configs[@]} Permission Set(s)..."
     
     local ps_name
-    for ps_config in "${ps_config_files[@]}"; do
+    for ps_config in "${all_ps_configs[@]}"; do
         ps_name=$(jq -r '.name' "${ps_config}")
         
         if "${SCRIPT_DIR}/permission-set.sh" check --name "${ps_name}" &>/dev/null; then
@@ -288,21 +318,38 @@ create_user_environment() {
         fi
     done
     echo ""
+}
+
+create_member_account_step() {
+    log_info "STEP 1: Creating AWS member account..."
     
-    # Step 1: Create member account
-    log_info "STEP 1/5: Creating AWS member account..."
+    local account_email
+    local email_user email_domain
+    
+    if [[ "${user_email}" =~ ^([^@]+)@(.+)$ ]]; then
+        email_user="${BASH_REMATCH[1]}"
+        email_domain="${BASH_REMATCH[2]}"
+        account_email="${email_user}+${username}-aws@${email_domain}"
+    else
+        log_error "Invalid email format: ${user_email}"
+        exit 1
+    fi
+    
     local account_id
     if ! account_id=$("${SCRIPT_DIR}/org-account.sh" create \
-        --name "${account_name}" \
+        --name "${username}" \
         --email "${account_email}"); then
         log_error "Failed to create account"
         exit 1
     fi
-    log_success "Account created: ${account_id}"
-    echo ""
     
-    # Step 2: Create Identity Center user
-    log_info "STEP 2/5: Creating Identity Center user..."
+    log_success "Account created: ${account_id}"
+    echo "${account_id}"
+}
+
+create_identity_center_user_step() {
+    log_info "STEP 2: Creating Identity Center user..."
+    
     local user_id
     if ! user_id=$("${SCRIPT_DIR}/identity-user.sh" create \
         --username "${username}" \
@@ -310,27 +357,54 @@ create_user_environment() {
         log_error "Failed to create user"
         exit 1
     fi
-    log_success "User created: ${user_id}"
-    echo ""
     
-    # Step 3: Assign Permission Sets
-    log_info "STEP 3/5: Assigning ${#ps_config_files[@]} Permission Set(s) to account..."
-    for ps_config in "${ps_config_files[@]}"; do
+    log_success "User created: ${user_id}"
+    echo "${user_id}"
+}
+
+assign_admin_permission_to_management_account() {
+    log_info "STEP 3: Assigning ${#mgmt_ps_configs[@]} admin permission(s) to Management Account..."
+    
+    local mgmt_account_id
+    mgmt_account_id=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text)
+    
+    local ps_name
+    for ps_config in "${mgmt_ps_configs[@]}"; do
+        ps_name=$(jq -r '.name' "${ps_config}")
+        if ! "${SCRIPT_DIR}/permission-set.sh" assign \
+            --user-id "${user_id}" \
+            --account-id "${mgmt_account_id}" \
+            --permission-set "${ps_name}"; then
+            log_error "Failed to assign permission set '${ps_name}' to management account"
+            exit 1
+        fi
+        log_success "Permission Set '${ps_name}' assigned to Management Account"
+    done
+    echo ""
+}
+
+assign_permissions_to_member_account() {
+    log_info "STEP 4: Assigning ${#member_ps_configs[@]} permission(s) to member account..."
+    
+    local ps_name
+    for ps_config in "${member_ps_configs[@]}"; do
         ps_name=$(jq -r '.name' "${ps_config}")
         if ! "${SCRIPT_DIR}/permission-set.sh" assign \
             --user-id "${user_id}" \
             --account-id "${account_id}" \
             --permission-set "${ps_name}"; then
-            log_error "Failed to assign permission set '${ps_name}'"
+            log_error "Failed to assign permission set '${ps_name}' to member account"
             exit 1
         fi
-        log_success "Permission Set '${ps_name}' assigned"
+        log_success "Permission Set '${ps_name}' assigned to member account"
     done
     echo ""
+}
+
+create_budget_step() {
+    log_info "STEP 5: Creating budget with automatic cost tracking..."
     
-    # Step 4: Create budget
-    log_info "STEP 4/5: Creating budget with automatic cost tracking..."
-    local budget_name="${account_name}-budget"
+    local budget_name="${username}-budget"
     
     # Build notification emails list: user + admin + extras
     local notification_emails="${user_email}"
@@ -357,8 +431,54 @@ create_user_environment() {
     fi
     log_success "Budget created"
     echo ""
+}
+
+print_configuration_summary() {
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════"
     
-    # Final summary
+    if [[ ${#mgmt_ps_configs[@]} -gt 0 && ${#member_ps_configs[@]} -gt 0 ]]; then
+        echo "    Creating Dual-Access Environment for ${username}"
+    elif [[ ${#mgmt_ps_configs[@]} -gt 0 ]]; then
+        echo "    Creating Organization Administrator: ${username}"
+    else
+        echo "    Creating Multi-Account Environment for ${username}"
+    fi
+    
+    echo "═══════════════════════════════════════════════════════════════════"
+    echo ""
+    
+    log_info "Configuration:"
+    log_info "  Username:         ${username}"
+    log_info "  User Email:       ${user_email}"
+    
+    if [[ ${#mgmt_ps_configs[@]} -gt 0 ]]; then
+        log_info "  Management Access: YES (${#mgmt_ps_configs[@]} permission set(s))"
+        for ps_config in "${mgmt_ps_configs[@]}"; do
+            local ps_name
+            ps_name=$(jq -r '.name' "${ps_config}")
+            log_info "    • ${ps_name} → Management Account"
+        done
+    fi
+    
+    if [[ "${create_member_account}" == "true" ]]; then
+        log_info "  Member Account:   ${username}"
+        log_info "  Member Permissions: ${#member_ps_configs[@]} permission set(s)"
+        for ps_config in "${member_ps_configs[@]}"; do
+            local ps_name
+            ps_name=$(jq -r '.name' "${ps_config}")
+            log_info "    • ${ps_name} → Member Account"
+        done
+        log_info "  Budget:           \$${budget}/month"
+    else
+        log_warning "  Member Account:   NONE (management account only)"
+        log_warning "  Budget:           NONE (no dedicated account)"
+    fi
+    
+    echo ""
+}
+
+print_final_summary() {
     echo "═══════════════════════════════════════════════════════════════════"
     echo "    ✅ Environment Ready!"
     echo "═══════════════════════════════════════════════════════════════════"
@@ -368,42 +488,136 @@ create_user_environment() {
     echo "  Email:             ${user_email}"
     echo "  User ID:           ${user_id}"
     echo ""
-    echo "AWS Account:"
-    echo "  Account Name:      ${account_name}"
-    echo "  Account ID:        ${account_id}"
-    echo "  Account Email:     ${account_email}"
-    echo ""
-    echo "Permissions:"
-    for ps_config in "${ps_config_files[@]}"; do
-        ps_name=$(jq -r '.name' "${ps_config}")
-        echo "  Permission Set:    ${ps_name}"
-    done
-    echo "  Status:            Assigned to account ${account_id}"
-    echo ""
-    echo "Budget:"
-    echo "  Name:              ${budget_name}"
-    echo "  Amount:            \$${budget}/month"
-    echo "  Tracking:          LinkedAccount (automatic)"
-    echo "  Alerts:            80%, 90%, 100%"
-    echo ""
+    
+    if [[ ${#mgmt_ps_configs[@]} -gt 0 ]]; then
+        local mgmt_account_id
+        mgmt_account_id=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text)
+        
+        echo "Management Account Access:"
+        echo "  Account ID:        ${mgmt_account_id}"
+        echo "  Permissions:"
+        for ps_config in "${mgmt_ps_configs[@]}"; do
+            local ps_name
+            ps_name=$(jq -r '.name' "${ps_config}")
+            echo "    • ${ps_name}"
+        done
+        echo "  Capabilities:"
+        echo "    ✅ Manage AWS Organizations"
+        echo "    ✅ Create/delete member accounts"
+        echo "    ✅ Manage IAM Identity Center"
+        echo "    ✅ Run account-manager.sh script"
+        echo ""
+    fi
+    
+    if [[ "${create_member_account}" == "true" ]]; then
+        echo "Member Account:"
+        echo "  Account Name:      ${username}"
+        echo "  Account ID:        ${account_id}"
+        echo "  Permissions:"
+        for ps_config in "${member_ps_configs[@]}"; do
+            local ps_name
+            ps_name=$(jq -r '.name' "${ps_config}")
+            echo "    • ${ps_name}"
+        done
+        echo ""
+        echo "Budget:"
+        echo "  Name:              ${username}-budget"
+        echo "  Amount:            \$${budget}/month"
+        echo "  Tracking:          LinkedAccount (automatic)"
+        echo "  Alerts:            80%, 90%, 100%"
+        echo ""
+    fi
+    
     echo "Next Steps for User:"
     echo "  1. Check email (${user_email}) for:"
     echo "     • IAM Identity Center activation link"
-    echo "     • 3 budget alert confirmation emails"
+    if [[ "${create_member_account}" == "true" ]]; then
+        echo "     • Budget alert confirmation emails"
+    fi
     echo "  2. Click activation link and set password"
     echo "  3. Enable MFA (REQUIRED)"
-    echo "  4. Confirm 3 budget alert subscriptions"
-    echo "  5. Get SSO portal URL:"
+    echo "  4. Get SSO portal URL:"
     echo "     aws sso-admin list-instances --query 'Instances[0].[AccessUrl]' --output text"
-    echo "  6. Login and select '${account_name}' account"
+    echo "  5. Login and select account:"
+    if [[ ${#mgmt_ps_configs[@]} -gt 0 ]]; then
+        echo "     • 'Management' account (organization admin)"
+    fi
+    if [[ "${create_member_account}" == "true" ]]; then
+        echo "     • '${username}' account (dedicated sandbox)"
+    fi
     echo ""
-    echo "✨ All costs in account ${account_id} are automatically tracked!"
-    echo "   No resource tagging required!"
-    echo ""
+    
+    if [[ "${create_member_account}" == "true" ]]; then
+        echo "✨ All costs in account ${account_id} are automatically tracked!"
+        echo "   No resource tagging required!"
+        echo ""
+    fi
+    
     echo "═══════════════════════════════════════════════════════════════════"
     echo ""
     
     log_success "User environment creation completed successfully!"
+}
+
+create_user_environment() {
+    local username="$1"
+    local user_email="$2"
+    local budget="$3"
+    local permission_sets="$4"  # Comma-separated permission set names
+    
+    # Parse comma-separated permission sets and build config file paths
+    IFS=',' read -ra ps_names <<< "${permission_sets}"
+    local ps_config_files=()
+    for ps_name in "${ps_names[@]}"; do
+        # Trim whitespace
+        ps_name=$(echo "${ps_name}" | xargs)
+        ps_config_files+=("permission-sets/${ps_name}.json")
+    done
+    
+    # Classify permission sets into management and member categories
+    classify_permission_sets "${ps_config_files[@]}"
+    
+    # Determine if we need to create a member account
+    local create_member_account=false
+    if should_create_member_account "${#member_ps_configs[@]}"; then
+        create_member_account=true
+    fi
+    
+    # Print configuration summary
+    print_configuration_summary
+    
+    # Step 0: Ensure all permission sets exist
+    ensure_permission_sets_exist
+    
+    # Step 1: Create member account (if needed)
+    local account_id=""
+    if [[ "${create_member_account}" == "true" ]]; then
+        account_id=$(create_member_account_step)
+        echo ""
+    fi
+    
+    # Step 2: Create Identity Center user
+    local user_id
+    user_id=$(create_identity_center_user_step)
+    echo ""
+    
+    # Step 3: Assign admin permissions to management account (if applicable)
+    if [[ ${#mgmt_ps_configs[@]} -gt 0 ]]; then
+        assign_admin_permission_to_management_account
+    fi
+    
+    # Step 4: Assign permissions to member account (if created)
+    if [[ "${create_member_account}" == "true" ]]; then
+        assign_permissions_to_member_account
+    fi
+    
+    # Step 5: Create budget (if member account was created)
+    if [[ "${create_member_account}" == "true" ]]; then
+        create_budget_step
+    fi
+    
+    # Print final summary
+    print_final_summary
 }
 
 list_user_environments() {
@@ -446,31 +660,87 @@ show_user_environment() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     "${SCRIPT_DIR}/identity-user.sh" show --username "${username}" || log_warning "User not found"
     
-    # Get account details
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  AWS Account"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    # Get user ID
+    local user_id
+    user_id=$("${SCRIPT_DIR}/identity-user.sh" get-id --username "${username}" 2>/dev/null || echo "")
+    
+    if [[ -z "${user_id}" ]]; then
+        echo ""
+        log_error "User '${username}' not found"
+        return 1
+    fi
+    
+    # Get management account ID
+    local mgmt_account_id
+    mgmt_account_id=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text 2>/dev/null)
+    
+    # Check for management account assignments
+    local has_mgmt_assignment=false
+    if [[ -n "${mgmt_account_id}" ]]; then
+        if "${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${mgmt_account_id}" 2>&1 | grep "${user_id}" > /dev/null 2>&1; then
+            has_mgmt_assignment=true
+        fi
+    fi
+    
+    # Check for member account
     local account_id
-    if account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null); then
-        echo "  Account Name: ${account_name}"
-        echo "  Account ID:   ${account_id}"
+    account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null || echo "")
+    local has_member_account=false
+    if [[ -n "${account_id}" ]]; then
+        has_member_account=true
+    fi
+    
+    # Show management account access (if exists)
+    if [[ "${has_mgmt_assignment}" == "true" ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Management Account Access"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Account ID:        ${mgmt_account_id}"
+        echo "  Role:              Organization Administrator"
+        echo ""
+        echo "  Permission Assignments:"
+        local mgmt_assignments
+        mgmt_assignments=$("${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${mgmt_account_id}" 2>&1)
+        if echo "${mgmt_assignments}" | grep "${user_id}" > /dev/null 2>&1; then
+            echo "${mgmt_assignments}" | grep -B 2 "${user_id}" | sed 's/^/    /'
+        else
+            echo "    (none found)"
+        fi
+    fi
+    
+    # Show member account (if exists)
+    if [[ "${has_member_account}" == "true" ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Member Account"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Account Name:      ${account_name}"
+        echo "  Account ID:        ${account_id}"
+        
+        # Get permission assignments
+        echo ""
+        echo "  Permission Assignments:"
+        local member_assignments
+        member_assignments=$("${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${account_id}" 2>&1)
+        if echo "${member_assignments}" | grep "${user_id}" > /dev/null 2>&1; then
+            echo "${member_assignments}" | grep -B 2 "${user_id}" | sed 's/^/    /'
+        else
+            echo "    (none found)"
+        fi
         
         # Get budget details
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "  Budget"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        "${SCRIPT_DIR}/budget.sh" show --name "${account_name}-budget" || log_warning "Budget not found"
-        
-        # Get permission assignments
+        "${SCRIPT_DIR}/budget.sh" show --name "${account_name}-budget" 2>/dev/null || log_warning "Budget not found"
+    fi
+    
+    # Summary
+    if [[ "${has_mgmt_assignment}" == "false" && "${has_member_account}" == "false" ]]; then
         echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  Permission Assignments"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        "${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${account_id}" || log_warning "No assignments found"
-    else
-        log_warning "Account '${account_name}' not found"
+        log_warning "User '${username}' has no account assignments"
     fi
     
     echo ""
@@ -481,15 +751,54 @@ delete_user_environment() {
     local account_name="${username}"
     local budget_name="${account_name}-budget"
     
+    # Get user ID
+    local user_id
+    user_id=$("${SCRIPT_DIR}/identity-user.sh" get-id --username "${username}" 2>/dev/null || echo "")
+    
+    if [[ -z "${user_id}" ]]; then
+        log_error "User '${username}' not found"
+        return 1
+    fi
+    
+    # Get management account ID
+    local mgmt_account_id
+    mgmt_account_id=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text 2>/dev/null)
+    
+    # Check for management account assignments
+    local has_mgmt_assignment=false
+    if [[ -n "${mgmt_account_id}" ]]; then
+        if "${SCRIPT_DIR}/permission-set.sh" list-assignments --account-id "${mgmt_account_id}" 2>&1 | grep "${user_id}" > /dev/null 2>&1; then
+            has_mgmt_assignment=true
+        fi
+    fi
+    
+    # Check for member account
+    local account_id
+    account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null || echo "")
+    local has_member_account=false
+    if [[ -n "${account_id}" ]]; then
+        has_member_account=true
+    fi
+    
     echo ""
     log_warning "═══════════════════════════════════════════════════════════════════"
     log_warning "  ⚠️  DELETE USER ENVIRONMENT"
     log_warning "═══════════════════════════════════════════════════════════════════"
     echo ""
     log_warning "This will delete the following for user: ${username}"
-    echo "  • Identity Center user (assignments auto-cleaned)"
-    echo "  • Budget (${budget_name})"
-    echo "  • AWS Account (${account_name}) - OPTIONAL"
+    echo ""
+    echo "  • Identity Center user"
+    
+    if [[ "${has_mgmt_assignment}" == "true" ]]; then
+        echo "  • Management account permission assignments (auto-cleaned)"
+        log_warning "    ⚠️  User has organization-wide administrative access!"
+    fi
+    
+    if [[ "${has_member_account}" == "true" ]]; then
+        echo "  • Member account budget (${budget_name})"
+        echo "  • Member AWS account (${account_name}) - OPTIONAL"
+    fi
+    
     echo ""
     echo -n "Are you sure you want to continue? Type 'yes' to confirm: "
     read -r confirm
@@ -502,54 +811,59 @@ delete_user_environment() {
     echo ""
     log_info "Starting deletion process..."
     
-    # Get IDs first
-    local user_id account_id
-    user_id=$("${SCRIPT_DIR}/identity-user.sh" get-id --username "${username}" 2>/dev/null || echo "")
-    account_id=$("${SCRIPT_DIR}/org-account.sh" get-id --name "${account_name}" 2>/dev/null || echo "")
-    
-    # Delete budget
-    if [[ -n "${account_id}" ]]; then
+    # Delete budget (if member account exists)
+    if [[ "${has_member_account}" == "true" ]]; then
         log_info "Deleting budget..."
         aws budgets delete-budget \
             --account-id "$(aws sts get-caller-identity --query Account --output text)" \
             --budget-name "${budget_name}" 2>/dev/null || log_warning "Budget not found or already deleted"
     fi
     
-    # Delete user (AWS will automatically clean up all permission set assignments)
-    if [[ -n "${user_id}" ]]; then
-        log_info "Deleting Identity Center user (permission assignments will be auto-cleaned)..."
-        aws identitystore delete-user \
-            --identity-store-id "$(aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text)" \
-            --user-id "${user_id}" 2>/dev/null || log_warning "User not found or already deleted"
+    # Delete user (AWS will automatically clean up ALL permission set assignments)
+    log_info "Deleting Identity Center user..."
+    if [[ "${has_mgmt_assignment}" == "true" ]]; then
+        log_info "  → Management account assignments will be auto-cleaned"
+    fi
+    if [[ "${has_member_account}" == "true" ]]; then
+        log_info "  → Member account assignments will be auto-cleaned"
     fi
     
-    # Ask about account deletion
-    echo ""
-    log_warning "⚠️  AWS Account Deletion"
-    log_warning "Account: ${account_name} (${account_id})"
-    echo ""
-    log_warning "Note: AWS account deletion is a sensitive operation that:"
-    log_warning "  • Requires the account to be in good standing"
-    log_warning "  • Takes 90 days to complete"
-    log_warning "  • Cannot be undone"
-    echo ""
-    echo -n "Delete AWS account? (yes/no): "
-    read -r confirm_account
+    aws identitystore delete-user \
+        --identity-store-id "$(aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text)" \
+        --user-id "${user_id}" 2>/dev/null || log_warning "User not found or already deleted"
     
-    if [[ "${confirm_account}" == "yes" ]]; then
-        log_warning "AWS account deletion not implemented in this script"
-        log_warning "To manually delete account ${account_id}:"
-        log_warning "  1. Go to: AWS Console → Organizations → Accounts"
-        log_warning "  2. Select account '${account_name}'"
-        log_warning "  3. Click 'Close account'"
-    else
-        log_info "Keeping AWS account ${account_name}"
+    # Ask about member account deletion (if exists)
+    if [[ "${has_member_account}" == "true" ]]; then
+        echo ""
+        log_warning "⚠️  AWS Member Account Deletion"
+        log_warning "Account: ${account_name} (${account_id})"
+        echo ""
+        log_warning "Note: AWS account deletion is a sensitive operation that:"
+        log_warning "  • Requires the account to be in good standing"
+        log_warning "  • Takes 90 days to complete"
+        log_warning "  • Cannot be undone"
+        echo ""
+        echo -n "Delete AWS member account? (yes/no): "
+        read -r confirm_account
+        
+        if [[ "${confirm_account}" == "yes" ]]; then
+            log_warning "AWS account deletion not implemented in this script"
+            log_warning "To manually delete account ${account_id}:"
+            log_warning "  1. Go to: AWS Console → Organizations → Accounts"
+            log_warning "  2. Select account '${account_name}'"
+            log_warning "  3. Click 'Close account'"
+        else
+            log_info "Keeping AWS member account ${account_name}"
+        fi
     fi
     
     echo ""
     log_success "User environment deletion completed"
-    log_info "Remaining resources:"
-    log_info "  • AWS Account: ${account_name} (if not manually deleted)"
+    
+    if [[ "${has_member_account}" == "true" ]]; then
+        log_info "Remaining resources:"
+        log_info "  • AWS Member Account: ${account_name} (if not manually deleted)"
+    fi
 }
 
 ################################################################################
