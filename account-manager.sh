@@ -1,16 +1,16 @@
 #!/bin/bash
 
 ################################################################################
-# User Manager - Multi-Account Orchestrator
+# Account Manager - Multi-Account Orchestrator
 #
-# Main entry point for IAM Identity Center user lifecycle management.
+# Main entry point for IAM Identity Center multi-account user environment management.
 # Orchestrates: org-account.sh, identity-user.sh, permission-set.sh, budget.sh
 #
 # Usage:
-#   ./user-manager.sh create --username NAME --email EMAIL [OPTIONS]
-#   ./user-manager.sh list
-#   ./user-manager.sh show --username NAME
-#   ./user-manager.sh delete --username NAME
+#   ./account-manager.sh create --username NAME --email EMAIL [OPTIONS]
+#   ./account-manager.sh list
+#   ./account-manager.sh show --username NAME
+#   ./account-manager.sh delete --username NAME
 #
 ################################################################################
 
@@ -66,7 +66,7 @@ log_warning() {
 
 usage() {
     cat << EOF
-User Manager - Multi-Account Orchestrator
+Account Manager - Multi-Account Orchestrator
 
 Simplified user environment creation: one command creates dedicated AWS account,
 Identity Center user, permissions, and budget with automatic cost tracking.

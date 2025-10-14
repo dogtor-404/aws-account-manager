@@ -105,7 +105,7 @@ The scripts will automatically handle:
 **Add extra notification recipients:**
 
 ```bash
-./user-manager.sh create \
+./account-manager.sh create \
   --username alice \
   --email alice@company.com \
   --notification-emails "finance@company.com,cto@company.com"
@@ -119,7 +119,7 @@ All recipients must click "Confirm subscription" in each email to receive alerts
 ### Create User Environment
 
 ```bash
-./user-manager.sh create \
+./account-manager.sh create \
   --username alice \
   --email alice@company.com \
   --budget 100
@@ -140,19 +140,19 @@ All emails will be received at the user's email address.
 ### List All Users
 
 ```bash
-./user-manager.sh list
+./account-manager.sh list
 ```
 
 ### Show User Details
 
 ```bash
-./user-manager.sh show --username alice
+./account-manager.sh show --username alice
 ```
 
 ### Delete User Environment
 
 ```bash
-./user-manager.sh delete --username alice
+./account-manager.sh delete --username alice
 ```
 
 ## Module Scripts
@@ -254,7 +254,7 @@ For advanced usage or automation:
 ## Project Structure
 
 ```text
-├── user-manager.sh          # Main orchestrator (create/list/show/delete)
+├── account-manager.sh          # Main orchestrator (create/list/show/delete)
 ├── org-account.sh           # AWS Organizations account management
 ├── identity-user.sh         # Identity Center user management
 ├── permission-set.sh        # Permission Set definition + assignment
@@ -271,7 +271,7 @@ For advanced usage or automation:
 
 ```bash
 # Verify user
-./user-manager.sh show --username alice
+./account-manager.sh show --username alice
 
 # Or check individually
 ./identity-user.sh list
@@ -358,7 +358,7 @@ Create custom Permission Set config:
 Then use it:
 
 ```bash
-./user-manager.sh create \
+./account-manager.sh create \
   --username alice \
   --email alice@company.com \
   --permission-set-config permission-sets/custom-developer.json
