@@ -31,9 +31,15 @@ readonly COLOR_WARNING='\033[0;33m'
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Default values
-DEFAULT_PERMISSION_SET_CONFIG="permission-sets/terraform-deployer.json"
-DEFAULT_BUDGET=100
+# Load environment variables if .env exists
+if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+    source "${SCRIPT_DIR}/.env"
+fi
+
+# Default values (with fallback if not set in .env)
+DEFAULT_PERMISSION_SET_CONFIG="${DEFAULT_PERMISSION_SET_CONFIG:-permission-sets/terraform-deployer.json}"
+DEFAULT_BUDGET="${DEFAULT_BUDGET:-100}"
+DEFAULT_NOTIFICATION_EMAILS="${DEFAULT_NOTIFICATION_EMAILS:-}"
 
 # Global variables
 COMMAND=""
@@ -41,7 +47,7 @@ USERNAME=""
 USER_EMAIL=""
 PERMISSION_SET_CONFIGS=()  # Array to support multiple permission sets
 BUDGET_AMOUNT="${DEFAULT_BUDGET}"
-NOTIFICATION_EMAILS=""  # Extra notification emails (comma-separated, optional)
+NOTIFICATION_EMAILS="${DEFAULT_NOTIFICATION_EMAILS}"  # Extra notification emails (comma-separated, optional)
 ADMIN_EMAIL=""  # Will be auto-detected from management account
 
 ################################################################################
