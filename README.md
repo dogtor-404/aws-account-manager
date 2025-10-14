@@ -1,4 +1,4 @@
-# AWS User Manager
+# AWS Account Manager
 
 Multi-account user environment management with IAM Identity Center, automatic cost tracking, and budget controls.
 
