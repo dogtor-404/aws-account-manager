@@ -31,33 +31,66 @@ Member Accounts (isolated)
 
 ## Prerequisites
 
-### 1. Enable AWS Organizations
+> **⚠️ One-Time Manual Setup Required**  
+> The following steps **must be completed manually** before using the automation scripts.  
+> These are AWS limitations - they cannot be automated via CLI/API.
+
+### 1. Enable AWS Organizations (Manual - One Time)
+
+**Required:** AWS Organizations must be enabled in your AWS account.
 
 ```bash
 # Go to: https://console.aws.amazon.com/organizations/
 # Click: "Create Organization" → "Enable All Features"
 ```
 
-### 2. Enable IAM Identity Center
+**Why manual?** AWS requires console confirmation for organization creation.
+
+### 2. Enable IAM Identity Center (Manual - One Time)
+
+**Required:** IAM Identity Center must be enabled before running scripts.
 
 ```bash
 # Go to: https://console.aws.amazon.com/singlesignon/
 # Click: "Enable"
 ```
 
-### 3. Run from Management Account
+**Why manual?** Initial IAM Identity Center setup requires console interaction.
+
+### 3. Configure AWS CLI (Local Setup)
+
+**Required:** Configure AWS CLI with management account credentials.
 
 ```bash
 aws configure --profile root
 export AWS_PROFILE=root
 ```
 
-### 4. Install Required Tools
+Verify access:
 
 ```bash
-aws --version  # AWS CLI v2
+aws sts get-caller-identity  # Should show your management account ID
+```
+
+### 4. Install Required Tools (Local Setup)
+
+**Required:** Install AWS CLI v2 and jq.
+
+```bash
+aws --version  # AWS CLI v2 required (v1 doesn't support SSO)
 jq --version   # JSON processor (brew install jq)
 ```
+
+---
+
+**✅ After completing the above prerequisites, everything else is automated!**
+
+The scripts will automatically handle:
+
+- ✅ Creating AWS member accounts
+- ✅ Creating Identity Center users
+- ✅ Creating and assigning Permission Sets
+- ✅ Setting up budgets with automatic cost tracking
 
 ## Usage
 
