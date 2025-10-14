@@ -41,6 +41,8 @@ USERNAME=""
 USER_EMAIL=""
 PERMISSION_SET_CONFIG=""
 BUDGET_AMOUNT="${DEFAULT_BUDGET}"
+NOTIFICATION_EMAILS=""  # Extra notification emails (comma-separated, optional)
+ADMIN_EMAIL=""  # Will be auto-detected from management account
 
 ################################################################################
 # Helper Functions
@@ -86,6 +88,8 @@ Options for 'create':
   --email EMAIL                User's email (also used to auto-generate account email)
   --permission-set-config FILE Permission Set config (default: ${DEFAULT_PERMISSION_SET_CONFIG})
   --budget AMOUNT              Monthly budget in USD (default: ${DEFAULT_BUDGET})
+  --notification-emails EMAILS Additional emails for budget alerts (comma-separated, optional)
+                               Note: User and admin emails are always included
 
 Examples:
   # Create user environment with defaults
@@ -102,6 +106,14 @@ Examples:
     --budget 150
 
   # Account email auto-generated: neoztcl+neoz-aws@gmail.com
+
+  # Create with additional notification emails
+  $(basename "$0") create \\
+    --username bob \\
+    --email bob@company.com \\
+    --notification-emails "finance@company.com,cto@company.com"
+
+  # Notifications will be sent to: bob@company.com, admin@org.com, finance@company.com, cto@company.com
 
   # List all user environments
   $(basename "$0") list
@@ -164,6 +176,18 @@ ensure_root_user() {
     fi
     
     log_success "Running from management account: ${account_id}"
+    
+    # Auto-detect management account email for budget notifications
+    local mgmt_email
+    mgmt_email=$(echo "${org_info}" | jq -r '.Organization.MasterAccountEmail // empty')
+    
+    if [[ -n "${mgmt_email}" ]]; then
+        ADMIN_EMAIL="${mgmt_email}"
+        log_success "Management account email: ${mgmt_email}"
+        log_info "Budget alerts will include admin email: ${mgmt_email}"
+    else
+        log_warning "Could not detect management account email"
+    fi
 }
 
 ensure_scripts_executable() {
@@ -275,11 +299,27 @@ create_user_environment() {
     # Step 4: Create budget
     log_info "STEP 4/5: Creating budget with automatic cost tracking..."
     local budget_name="${account_name}-budget"
+    
+    # Build notification emails list: user + admin + extras
+    local notification_emails="${user_email}"
+    if [[ -n "${ADMIN_EMAIL}" ]]; then
+        notification_emails="${notification_emails},${ADMIN_EMAIL}"
+    fi
+    if [[ -n "${NOTIFICATION_EMAILS}" ]]; then
+        notification_emails="${notification_emails},${NOTIFICATION_EMAILS}"
+    fi
+    
+    log_info "Budget alerts will be sent to:"
+    IFS=',' read -ra email_array <<< "${notification_emails}"
+    for email in "${email_array[@]}"; do
+        log_info "  • ${email}"
+    done
+    
     if ! "${SCRIPT_DIR}/budget.sh" create-linked \
         --account-id "${account_id}" \
         --name "${budget_name}" \
         --amount "${budget}" \
-        --email "${user_email}"; then
+        --notification-emails "${notification_emails}"; then
         log_error "Failed to create budget"
         exit 1
     fi
@@ -535,6 +575,10 @@ parse_arguments() {
                 ;;
             --budget)
                 BUDGET_AMOUNT="$2"
+                shift 2
+                ;;
+            --notification-emails)
+                NOTIFICATION_EMAILS="$2"
                 shift 2
                 ;;
             *)

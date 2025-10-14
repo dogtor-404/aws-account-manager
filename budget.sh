@@ -6,8 +6,8 @@
 # Manages AWS Budgets with LinkedAccount cost tracking
 #
 # Usage:
-#   ./budget.sh create-linked --account-id ID --name NAME --amount AMOUNT --email EMAIL
-#   ./budget.sh create-global --name NAME --amount AMOUNT --email EMAIL
+#   ./budget.sh create-linked --account-id ID --name NAME --amount AMOUNT --notification-emails EMAILS
+#   ./budget.sh create-global --name NAME --amount AMOUNT --notification-emails EMAILS
 #   ./budget.sh check --name NAME
 #   ./budget.sh list
 #   ./budget.sh show --name NAME
@@ -32,7 +32,7 @@ readonly COLOR_WARNING='\033[0;33m'
 COMMAND=""
 BUDGET_NAME=""
 BUDGET_AMOUNT=""
-EMAIL_ADDRESS=""
+NOTIFICATION_EMAILS=""  # Comma-separated list of all notification recipients
 LINKED_ACCOUNT_ID=""
 MANAGEMENT_ACCOUNT_ID=""
 
@@ -64,8 +64,8 @@ usage() {
 Budget Management Script - LinkedAccount Cost Tracking
 
 Usage:
-  $(basename "$0") create-linked --account-id ID --name NAME --amount AMOUNT --email EMAIL
-  $(basename "$0") create-global --name NAME --amount AMOUNT --email EMAIL
+  $(basename "$0") create-linked --account-id ID --name NAME --amount AMOUNT --notification-emails EMAILS
+  $(basename "$0") create-global --name NAME --amount AMOUNT --notification-emails EMAILS
   $(basename "$0") check --name NAME
   $(basename "$0") list
   $(basename "$0") show --name NAME
@@ -78,10 +78,10 @@ Commands:
   show             Show budget details
 
 Options:
-  --account-id ID   Member account ID to track (for create-linked)
-  --name NAME       Budget name
-  --amount AMOUNT   Monthly budget amount in USD
-  --email EMAIL     Email address for budget alerts
+  --account-id ID          Member account ID to track (for create-linked)
+  --name NAME              Budget name
+  --amount AMOUNT          Monthly budget amount in USD
+  --notification-emails EMAILS  Comma-separated list of email addresses for budget alerts
 
 Examples:
   # Create budget for member account
@@ -89,13 +89,13 @@ Examples:
     --account-id 123456789012 \\
     --name "alice-dev-budget" \\
     --amount 100 \\
-    --email alice@company.com
+    --notification-emails "alice@company.com,admin@company.com"
 
   # Create global budget for entire organization
   $(basename "$0") create-global \\
     --name "org-monthly-budget" \\
     --amount 1000 \\
-    --email admin@company.com
+    --notification-emails "admin@company.com,finance@company.com"
   
   # Check if budget exists
   $(basename "$0") check --name "alice-dev-budget"
@@ -163,12 +163,20 @@ create_linked_account_budget() {
     local account_id="$1"
     local name="$2"
     local amount="$3"
-    local email="$4"
+    local notification_emails="$4"
     
     log_info "Creating LinkedAccount budget: ${name}"
     log_info "  Tracking Account: ${account_id}"
     log_info "  Amount: \$${amount}/month"
-    log_info "  Email: ${email}"
+    
+    # Parse notification emails (comma-separated)
+    IFS=',' read -ra email_array <<< "${notification_emails}"
+    local email_count=${#email_array[@]}
+    
+    log_info "  Notification recipients (${email_count}):"
+    for email in "${email_array[@]}"; do
+        log_info "    • ${email}"
+    done
     
     # Check if already exists
     if check_budget_exists "${name}"; then
@@ -202,14 +210,24 @@ create_linked_account_budget() {
 EOF
 )
     
-    # Create budget with notifications
+    # Build subscribers JSON array
+    local subscribers_json=""
+    for email in "${email_array[@]}"; do
+        if [[ -n "${subscribers_json}" ]]; then
+            subscribers_json="${subscribers_json},"
+        fi
+        subscribers_json="${subscribers_json}{SubscriptionType=EMAIL,Address=${email}}"
+    done
+    subscribers_json="[${subscribers_json}]"
+    
+    # Create budget with notifications to all subscribers
     aws budgets create-budget \
         --account-id "${MANAGEMENT_ACCOUNT_ID}" \
         --budget "${budget_json}" \
         --notifications-with-subscribers \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=80,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=90,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=100,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=80,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=90,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=100,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
         2>&1 | grep -v "^$" || true
     
     log_success "Budget created successfully"
@@ -220,18 +238,34 @@ EOF
     log_info "✨ No resource tagging required!"
     log_info "All costs in account ${account_id} are automatically tracked"
     echo ""
-    log_info "IMPORTANT: Check ${email} for 3 confirmation emails from AWS Notifications"
-    log_info "You must click 'Confirm subscription' in each email to receive alerts"
+    
+    local total_confirmations=$((email_count * 3))
+    log_info "IMPORTANT: ${email_count} recipient(s) will each receive 3 confirmation emails"
+    log_info "           Total confirmation emails: ${total_confirmations}"
+    log_info "           Each recipient must click 'Confirm subscription' in all 3 emails"
+    echo ""
+    log_info "Check these email addresses:"
+    for email in "${email_array[@]}"; do
+        log_info "  • ${email}"
+    done
 }
 
 create_global_budget() {
     local name="$1"
     local amount="$2"
-    local email="$3"
+    local notification_emails="$3"
     
     log_info "Creating global budget: ${name}"
     log_info "  Amount: \$${amount}/month"
-    log_info "  Email: ${email}"
+    
+    # Parse notification emails (comma-separated)
+    IFS=',' read -ra email_array <<< "${notification_emails}"
+    local email_count=${#email_array[@]}
+    
+    log_info "  Notification recipients (${email_count}):"
+    for email in "${email_array[@]}"; do
+        log_info "    • ${email}"
+    done
     
     # Check if already exists
     if check_budget_exists "${name}"; then
@@ -242,13 +276,23 @@ create_global_budget() {
     # Create budget without filters (tracks all costs)
     log_info "Creating global budget (tracks all organization costs)..."
     
+    # Build subscribers JSON array
+    local subscribers_json=""
+    for email in "${email_array[@]}"; do
+        if [[ -n "${subscribers_json}" ]]; then
+            subscribers_json="${subscribers_json},"
+        fi
+        subscribers_json="${subscribers_json}{SubscriptionType=EMAIL,Address=${email}}"
+    done
+    subscribers_json="[${subscribers_json}]"
+    
     aws budgets create-budget \
         --account-id "${MANAGEMENT_ACCOUNT_ID}" \
         --budget "BudgetName=${name},BudgetLimit={Amount=${amount},Unit=USD},TimeUnit=MONTHLY,BudgetType=COST" \
         --notifications-with-subscribers \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=80,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=90,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
-            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=100,ThresholdType=PERCENTAGE},Subscribers=[{SubscriptionType=EMAIL,Address=${email}}]" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=80,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=90,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
+            "Notification={NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=100,ThresholdType=PERCENTAGE},Subscribers=${subscribers_json}" \
         2>&1 | grep -v "^$" || true
     
     log_success "Global budget created successfully"
@@ -256,8 +300,16 @@ create_global_budget() {
     log_success "Scope: All organization costs"
     log_success "Alert thresholds: 80%, 90%, 100%"
     echo ""
-    log_info "IMPORTANT: Check ${email} for 3 confirmation emails from AWS Notifications"
-    log_info "You must click 'Confirm subscription' in each email to receive alerts"
+    
+    local total_confirmations=$((email_count * 3))
+    log_info "IMPORTANT: ${email_count} recipient(s) will each receive 3 confirmation emails"
+    log_info "           Total confirmation emails: ${total_confirmations}"
+    log_info "           Each recipient must click 'Confirm subscription' in all 3 emails"
+    echo ""
+    log_info "Check these email addresses:"
+    for email in "${email_array[@]}"; do
+        log_info "  • ${email}"
+    done
 }
 
 check_command() {
@@ -377,8 +429,8 @@ parse_arguments() {
                 BUDGET_AMOUNT="$2"
                 shift 2
                 ;;
-            --email)
-                EMAIL_ADDRESS="$2"
+            --notification-emails)
+                NOTIFICATION_EMAILS="$2"
                 shift 2
                 ;;
             *)
@@ -405,8 +457,8 @@ validate_inputs() {
                 log_error "--amount is required for create-linked command"
                 exit 1
             fi
-            if [[ -z "${EMAIL_ADDRESS}" ]]; then
-                log_error "--email is required for create-linked command"
+            if [[ -z "${NOTIFICATION_EMAILS}" ]]; then
+                log_error "--notification-emails is required for create-linked command"
                 exit 1
             fi
             if ! [[ "${BUDGET_AMOUNT}" =~ ^[0-9]+$ ]]; then
@@ -423,8 +475,8 @@ validate_inputs() {
                 log_error "--amount is required for create-global command"
                 exit 1
             fi
-            if [[ -z "${EMAIL_ADDRESS}" ]]; then
-                log_error "--email is required for create-global command"
+            if [[ -z "${NOTIFICATION_EMAILS}" ]]; then
+                log_error "--notification-emails is required for create-global command"
                 exit 1
             fi
             if ! [[ "${BUDGET_AMOUNT}" =~ ^[0-9]+$ ]]; then
@@ -452,10 +504,10 @@ main() {
     
     case "${COMMAND}" in
         create-linked)
-            create_linked_account_budget "${LINKED_ACCOUNT_ID}" "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${EMAIL_ADDRESS}"
+            create_linked_account_budget "${LINKED_ACCOUNT_ID}" "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${NOTIFICATION_EMAILS}"
             ;;
         create-global)
-            create_global_budget "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${EMAIL_ADDRESS}"
+            create_global_budget "${BUDGET_NAME}" "${BUDGET_AMOUNT}" "${NOTIFICATION_EMAILS}"
             ;;
         check)
             check_command "${BUDGET_NAME}"

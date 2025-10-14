@@ -61,6 +61,28 @@ jq --version   # JSON processor (brew install jq)
 
 ## Usage
 
+### Budget Notification Configuration
+
+**Default behavior:**
+
+- Budget alerts are sent to **user email + management account email** (auto-detected)
+- Management account email is automatically detected from AWS Organizations
+- Admin email is always included for monitoring purposes
+
+**Add extra notification recipients:**
+
+```bash
+./user-manager.sh create \
+  --username alice \
+  --email alice@company.com \
+  --notification-emails "finance@company.com,cto@company.com"
+```
+
+This will send budget alerts to: `alice@company.com`, `admin@org.com`, `finance@company.com`, `cto@company.com`
+
+**Important:** Each recipient will receive **3 confirmation emails** (for 80%, 90%, 100% thresholds).
+All recipients must click "Confirm subscription" in each email to receive alerts.
+
 ### Create User Environment
 
 ```bash
@@ -77,6 +99,7 @@ jq --version   # JSON processor (brew install jq)
 - User Identity: `alice` (IAM Identity Center)
 - Permission: TerraformDeployer (assigned to account)
 - Budget: $100/month (automatic LinkedAccount tracking)
+  - Alerts sent to: `alice@company.com` + management account email
 
 **Note:** Account email is automatically generated using + notation.
 All emails will be received at the user's email address.
@@ -181,7 +204,9 @@ For advanced usage or automation:
 
 1. User receives IAM Identity Center activation email
 2. User clicks link, sets password, and enables MFA
-3. User confirms 3 budget alert email subscriptions
+3. User confirms 3 budget alert email subscriptions (80%, 90%, 100%)
+   - Admin also receives 3 confirmation emails (if configured with extra recipients, they also receive 3 each)
+   - All recipients must confirm subscriptions to receive alerts
 4. User gets SSO portal URL:
 
    ```bash
