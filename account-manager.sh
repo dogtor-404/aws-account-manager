@@ -37,7 +37,7 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
 fi
 
 # Default values (with fallback if not set in .env)
-DEFAULT_PERMISSION_SET_CONFIG="${DEFAULT_PERMISSION_SET_CONFIG:-permission-sets/terraform-deployer.json}"
+DEFAULT_PERMISSION_SET_CONFIG="${DEFAULT_PERMISSION_SET_CONFIG:-dev}"
 DEFAULT_BUDGET="${DEFAULT_BUDGET:-100}"
 DEFAULT_NOTIFICATION_EMAILS="${DEFAULT_NOTIFICATION_EMAILS:-}"
 
@@ -45,7 +45,7 @@ DEFAULT_NOTIFICATION_EMAILS="${DEFAULT_NOTIFICATION_EMAILS:-}"
 COMMAND=""
 USERNAME=""
 USER_EMAIL=""
-PERMISSION_SET_CONFIGS=()  # Array to support multiple permission sets
+PERMISSION_SET_CONFIGS=""  # Comma-separated permission set names (e.g., "terraform-deployer,administrator")
 BUDGET_AMOUNT="${DEFAULT_BUDGET}"
 NOTIFICATION_EMAILS="${DEFAULT_NOTIFICATION_EMAILS}"  # Extra notification emails (comma-separated, optional)
 ADMIN_EMAIL=""  # Will be auto-detected from management account
@@ -92,7 +92,7 @@ Commands:
 Options for 'create':
   --username NAME              Username for Identity Center user (e.g., alice)
   --email EMAIL                User's email (also used to auto-generate account email)
-  --permission-set-config FILE Permission Set config (can be specified multiple times)
+  --permission-sets NAMES      Permission Set names, comma-separated (e.g., "terraform-deployer,administrator")
                                (default: ${DEFAULT_PERMISSION_SET_CONFIG})
   --budget AMOUNT              Monthly budget in USD (default: ${DEFAULT_BUDGET})
   --notification-emails EMAILS Additional emails for budget alerts (comma-separated, optional)
@@ -126,8 +126,7 @@ Examples:
   $(basename "$0") create \\
     --username charlie \\
     --email charlie@company.com \\
-    --permission-set-config permission-sets/terraform-deployer.json \\
-    --permission-set-config permission-sets/administrator.json
+    --permission-sets "terraform-deployer,administrator"
 
   # User will have both TerraformDeployer and AdministratorAccess permissions
 
@@ -227,7 +226,7 @@ create_user_environment() {
     local username="$1"
     local user_email="$2"
     local budget="$3"
-    # Use global PERMISSION_SET_CONFIGS array directly (bash 3.2 compatible)
+    local permission_sets="$4"  # Comma-separated permission set names
     
     # Auto-generate account email from user email using + notation
     local account_email
@@ -244,6 +243,15 @@ create_user_environment() {
     
     local account_name="${username}"
     
+    # Parse comma-separated permission sets and build config file paths
+    IFS=',' read -ra ps_names <<< "${permission_sets}"
+    local ps_config_files=()
+    for ps_name in "${ps_names[@]}"; do
+        # Trim whitespace
+        ps_name=$(echo "${ps_name}" | xargs)
+        ps_config_files+=("permission-sets/${ps_name}.json")
+    done
+    
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
     echo "    Creating Multi-Account Environment for ${username}"
@@ -254,18 +262,18 @@ create_user_environment() {
     log_info "  User Email:       ${user_email}"
     log_info "  Account Name:     ${account_name}"
     log_info "  Account Email:    ${account_email} (auto-generated)"
-    log_info "  Permission Sets:  ${#PERMISSION_SET_CONFIGS[@]} config(s)"
-    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+    log_info "  Permission Sets:  ${#ps_config_files[@]} config(s)"
+    for ps_config in "${ps_config_files[@]}"; do
         log_info "    - ${ps_config}"
     done
     log_info "  Budget:           \$${budget}/month"
     echo ""
     
     # Step 0: Ensure Permission Sets exist
-    log_info "STEP 0/5: Checking ${#PERMISSION_SET_CONFIGS[@]} Permission Set(s)..."
+    log_info "STEP 0/5: Checking ${#ps_config_files[@]} Permission Set(s)..."
     
     local ps_name
-    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+    for ps_config in "${ps_config_files[@]}"; do
         ps_name=$(jq -r '.name' "${ps_config}")
         
         if "${SCRIPT_DIR}/permission-set.sh" check --name "${ps_name}" &>/dev/null; then
@@ -306,8 +314,8 @@ create_user_environment() {
     echo ""
     
     # Step 3: Assign Permission Sets
-    log_info "STEP 3/5: Assigning ${#PERMISSION_SET_CONFIGS[@]} Permission Set(s) to account..."
-    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+    log_info "STEP 3/5: Assigning ${#ps_config_files[@]} Permission Set(s) to account..."
+    for ps_config in "${ps_config_files[@]}"; do
         ps_name=$(jq -r '.name' "${ps_config}")
         if ! "${SCRIPT_DIR}/permission-set.sh" assign \
             --user-id "${user_id}" \
@@ -366,7 +374,7 @@ create_user_environment() {
     echo "  Account Email:     ${account_email}"
     echo ""
     echo "Permissions:"
-    for ps_config in "${PERMISSION_SET_CONFIGS[@]}"; do
+    for ps_config in "${ps_config_files[@]}"; do
         ps_name=$(jq -r '.name' "${ps_config}")
         echo "  Permission Set:    ${ps_name}"
     done
@@ -581,8 +589,8 @@ parse_arguments() {
                 USER_EMAIL="$2"
                 shift 2
                 ;;
-            --permission-set-config)
-                PERMISSION_SET_CONFIGS+=("$2")
+            --permission-sets)
+                PERMISSION_SET_CONFIGS="$2"
                 shift 2
                 ;;
             --budget)
@@ -601,9 +609,9 @@ parse_arguments() {
         esac
     done
     
-    # Set default permission set if none specified
-    if [[ ${#PERMISSION_SET_CONFIGS[@]} -eq 0 ]]; then
-        PERMISSION_SET_CONFIGS=("${DEFAULT_PERMISSION_SET_CONFIG}")
+    # Set default permission sets if none specified
+    if [[ -z "${PERMISSION_SET_CONFIGS}" ]]; then
+        PERMISSION_SET_CONFIGS="${DEFAULT_PERMISSION_SET_CONFIG}"
     fi
 }
 
@@ -627,9 +635,13 @@ validate_inputs() {
                 log_error "Budget amount must be a positive integer"
                 exit 1
             fi
-            for config in "${PERMISSION_SET_CONFIGS[@]}"; do
-                if [[ ! -f "${config}" ]]; then
-                    log_error "Permission Set config file not found: ${config}"
+            # Validate permission set config files exist
+            IFS=',' read -ra ps_names <<< "${PERMISSION_SET_CONFIGS}"
+            for ps_name in "${ps_names[@]}"; do
+                ps_name=$(echo "${ps_name}" | xargs)
+                local config_file="permission-sets/${ps_name}.json"
+                if [[ ! -f "${config_file}" ]]; then
+                    log_error "Permission Set config file not found: ${config_file}"
                     exit 1
                 fi
             done
@@ -654,7 +666,7 @@ main() {
     
     case "${COMMAND}" in
         create)
-            create_user_environment "${USERNAME}" "${USER_EMAIL}" "${BUDGET_AMOUNT}"
+            create_user_environment "${USERNAME}" "${USER_EMAIL}" "${BUDGET_AMOUNT}" "${PERMISSION_SET_CONFIGS}"
             ;;
         list)
             list_user_environments
