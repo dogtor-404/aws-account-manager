@@ -1,0 +1,10 @@
+{
+  "name": "TerraformDeployerPermissionSet",
+  "description": "Full infrastructure management for Terraform with security restrictions",
+  "session_duration": "PT4H",
+  "managed_policies": [
+    "PowerUserAccess"
+  ],
+  "inline_policy_file": "policies/terraform-deployer-permission-policy.json"
+}
+

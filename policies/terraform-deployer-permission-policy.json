@@ -1,0 +1,141 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowIAMRoleManagement",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:ListRoles",
+        "iam:UpdateRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:PassRole"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowIAMPolicyManagement",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicies",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowIAMReadOperations",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetUser",
+        "iam:GetGroup",
+        "iam:ListUsers",
+        "iam:ListGroups",
+        "iam:ListAccountAliases"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyIAMUserManagement",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:UpdateUser",
+        "iam:CreateGroup",
+        "iam:DeleteGroup",
+        "iam:AddUserToGroup",
+        "iam:RemoveUserFromGroup",
+        "iam:AttachUserPolicy",
+        "iam:DetachUserPolicy",
+        "iam:PutUserPolicy",
+        "iam:DeleteUserPolicy",
+        "iam:CreateAccessKey",
+        "iam:DeleteAccessKey",
+        "iam:UpdateAccessKey",
+        "iam:CreateLoginProfile",
+        "iam:DeleteLoginProfile",
+        "iam:UpdateLoginProfile"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAccountLevelChanges",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateAccountAlias",
+        "iam:DeleteAccountAlias",
+        "iam:UpdateAccountPasswordPolicy",
+        "iam:DeleteAccountPasswordPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyBillingAndCostManagement",
+      "Effect": "Deny",
+      "Action": [
+        "account:*",
+        "billing:*",
+        "budgets:ModifyBudget",
+        "budgets:DeleteBudget",
+        "ce:UpdateCostAllocationTagsStatus",
+        "cur:DeleteReportDefinition"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyOrganizationChanges",
+      "Effect": "Deny",
+      "Action": [
+        "organizations:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyAuditLogDeletion",
+      "Effect": "Deny",
+      "Action": [
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:StopLogging",
+        "cloudtrail:UpdateTrail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyGuardDutyDisable",
+      "Effect": "Deny",
+      "Action": [
+        "guardduty:DeleteDetector",
+        "guardduty:DisassociateFromAdministratorAccount",
+        "guardduty:DisassociateMembers",
+        "guardduty:StopMonitoringMembers"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+
