@@ -257,12 +257,108 @@ create_permission_set() {
         echo -n "Update existing Permission Set? (y/N): "
         read -r response
         if [[ "${response}" != "y" && "${response}" != "Y" ]]; then
-            log_info "Skipping creation"
+            log_info "Skipping update"
             return 0
         fi
+        
         log_info "Updating existing Permission Set..."
-        # For now, just skip update logic
-        log_warning "Update not implemented yet, skipping"
+        
+        # Update session duration
+        log_info "Updating session duration to: ${ps_session}"
+        aws sso-admin update-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${existing_arn}" \
+            --session-duration "${ps_session}" \
+            --output json > /dev/null
+        log_success "Session duration updated"
+        
+        # Update inline policy
+        log_info "Updating inline policy from: ${ps_inline_policy}"
+        local policy_content
+        policy_content=$(cat "${ps_inline_policy}")
+        
+        aws sso-admin put-inline-policy-to-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${existing_arn}" \
+            --inline-policy "${policy_content}" \
+            --output json > /dev/null
+        log_success "Inline policy updated"
+        
+        # Update managed policies
+        log_info "Updating managed policies..."
+        
+        # Get currently attached managed policies
+        local current_policies
+        current_policies=$(aws sso-admin list-managed-policies-in-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${existing_arn}" \
+            --output json | jq -r '.AttachedManagedPolicies[].Name')
+        
+        # Attach new managed policies that aren't already attached
+        for policy in ${managed_policies}; do
+            if ! echo "${current_policies}" | grep -q "^${policy}$"; then
+                log_info "Attaching managed policy: ${policy}"
+                aws sso-admin attach-managed-policy-to-permission-set \
+                    --instance-arn "${SSO_INSTANCE_ARN}" \
+                    --permission-set-arn "${existing_arn}" \
+                    --managed-policy-arn "arn:aws:iam::aws:policy/${policy}" \
+                    --output json > /dev/null
+                log_success "Managed policy attached: ${policy}"
+            else
+                log_info "Managed policy already attached: ${policy}"
+            fi
+        done
+        
+        log_success "Permission Set updated successfully!"
+        
+        # Provision the updated permission set to all assigned accounts
+        log_info "Provisioning updated permission set to assigned accounts..."
+        
+        # Get all accounts assigned to this permission set
+        local assigned_accounts
+        assigned_accounts=$(aws sso-admin list-accounts-for-provisioned-permission-set \
+            --instance-arn "${SSO_INSTANCE_ARN}" \
+            --permission-set-arn "${existing_arn}" \
+            --output json 2>/dev/null | jq -r '.AccountIds[]' || echo "")
+        
+        if [[ -z "${assigned_accounts}" ]]; then
+            log_warning "No accounts currently assigned to this permission set"
+        else
+            local provision_count=0
+            for account_id in ${assigned_accounts}; do
+                log_info "Provisioning to account: ${account_id}"
+                local provision_result
+                provision_result=$(aws sso-admin provision-permission-set \
+                    --instance-arn "${SSO_INSTANCE_ARN}" \
+                    --permission-set-arn "${existing_arn}" \
+                    --target-type AWS_ACCOUNT \
+                    --target-id "${account_id}" \
+                    --output json 2>&1)
+                
+                if [[ $? -eq 0 ]]; then
+                    ((provision_count++))
+                    log_success "Provisioned to account ${account_id}"
+                else
+                    log_warning "Failed to provision to account ${account_id}: ${provision_result}"
+                fi
+            done
+            
+            if [[ ${provision_count} -gt 0 ]]; then
+                log_success "Provisioned to ${provision_count} account(s)"
+                log_info "Waiting for provisioning to complete..."
+                sleep 3
+            fi
+        fi
+        
+        echo ""
+        echo "Permission Set Details:"
+        echo "  Name: ${ps_name}"
+        echo "  ARN: ${existing_arn}"
+        echo "  Description: ${ps_description}"
+        echo "  Session Duration: ${ps_session}"
+        echo ""
+        log_info "✓ Permission set updated and provisioned"
+        log_info "✓ Users need to re-login to SSO to get updated permissions"
         return 0
     fi
     

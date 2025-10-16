@@ -1,7 +1,7 @@
 {
   "name": "AdministratorPermissions",
   "description": "Full administrator access with critical account protection safeguards",
-  "session_duration": "PT8H",
+  "session_duration": "PT2H",
   "managed_policies": [
     "AdministratorAccess"
   ],

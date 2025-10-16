@@ -1,7 +1,7 @@
 {
   "name": "TerraformDeployerPermissions",
   "description": "Full infrastructure management for Terraform with security restrictions",
-  "session_duration": "PT4H",
+  "session_duration": "PT12H",
   "managed_policies": [
     "PowerUserAccess"
   ],
