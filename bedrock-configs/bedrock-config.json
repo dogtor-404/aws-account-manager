@@ -1,0 +1,27 @@
+{
+  "admin_profile": "root",
+  "region": "us-east-1",
+  "policy_name_prefix": "CursorBedrockInvokePolicy",
+  "model_ids": [
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-haiku-4-5-20251001-v1:0"
+  ],
+  "inference_profile_ids": [
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  ],
+  "use_case": {
+    "company_name": "Ryzend LLC",
+    "company_website": "https://ryzend.com",
+    "intended_users": "internal developers",
+    "industry_option": "Software",
+    "other_industry_option": "",
+    "use_cases": "Coding assistant in Cursor via Amazon Bedrock"
+  },
+  "target_regions": [
+    "us-east-1",
+    "us-east-2",
+    "us-west-2"
+  ]
+}
+
